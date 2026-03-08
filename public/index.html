@@ -84,12 +84,55 @@
             <canvas id="price-history-chart" height="200"></canvas>
           </div>
         </div>
-        <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
-          <label style="font-size:0.85rem;color:var(--text-secondary)">Group by:</label>
-          <select id="group-by-select" class="form-select" style="max-width:200px" onchange="loadJobGroups()"></select>
+
+        <!-- Grouping Section -->
+        <div
+          style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;background:var(--card-bg)">
+          <h3 style="margin:0 0 12px;font-size:1rem">📊 Grouping</h3>
+
+          <!-- Auto group by field -->
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+            <label style="font-size:0.85rem;color:var(--text-secondary)">Auto group by field:</label>
+            <select id="group-by-select" class="form-input" style="max-width:180px" onchange="loadJobGroups()"></select>
+          </div>
+
+          <!-- Custom group rules -->
+          <details style="margin-top:8px">
+            <summary style="cursor:pointer;font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px">⚙️ Custom
+              Group Rules (contains matching)</summary>
+            <div id="custom-group-rules" style="margin-top:8px"></div>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <button class="btn btn-sm btn-ghost" onclick="addCustomGroupRule()">+ Add Rule</button>
+              <button class="btn btn-sm btn-primary" onclick="applyCustomGroups()">Apply Custom Groups</button>
+            </div>
+          </details>
         </div>
+
+        <!-- Group results -->
         <div id="job-groups-grid" class="jobs-grid" style="margin-bottom:20px"></div>
-        <h3 style="margin-bottom:12px;font-size:1rem">Matched Listings</h3>
+
+        <!-- Filter bar for listings -->
+        <div class="filter-bar" style="margin-bottom:12px">
+          <input class="form-input" id="job-listing-search" placeholder="Search title..." style="max-width:180px"
+            onkeyup="if(event.key==='Enter')loadJobListingsFiltered()">
+          <select id="job-listing-status">
+            <option value="">All Status</option>
+            <option value="active" selected>🟢 Active</option>
+            <option value="sold">🔴 Sold</option>
+            <option value="excluded">⛔ Excluded</option>
+          </select>
+          <select id="job-listing-sort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="price_low">Price: Low → High</option>
+            <option value="price_high">Price: High → Low</option>
+          </select>
+          <label class="checkbox-label">
+            <input type="checkbox" id="job-listing-matched" checked> Matched only
+          </label>
+          <button class="btn btn-sm" onclick="loadJobListingsFiltered()">Apply</button>
+        </div>
+
         <div class="listings-grid" id="job-listings-grid"></div>
         <div class="pagination" id="job-listings-pagination"></div>
       </section>

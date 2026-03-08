@@ -77,6 +77,84 @@ async function loadStats() {
   }
 }
 
+/* ─── Shared Listing Card ──────────────────────────────────── */
+function renderListingCard(l) {
+  const imgSrc = l.image_path ? `/api/images/${l.image_path}` :
+    (l.image_urls && l.image_urls.length > 0 ? l.image_urls[0] : '');
+  const detailFields = (typeof l.detail_fields === 'string' ? (() => { try { return JSON.parse(l.detail_fields); } catch { return {}; } })() : l.detail_fields) || {};
+  const detailHtml = Object.entries(detailFields).slice(0, 5).map(([k, v]) =>
+    `<div class="listing-card-detail-row"><span class="listing-card-detail-key">${esc(k)}</span><span>${esc(String(v))}</span></div>`
+  ).join('');
+
+  const statusClass = l.status === 'sold' ? 'listing-badge-sold'
+    : l.status === 'excluded' ? 'listing-badge-sold' : 'listing-badge-active';
+  const statusLabel = l.status === 'sold' ? '🔴 Sold'
+    : l.status === 'excluded' ? '⛔ Excluded' : '🟢 Active';
+
+  // Price comparison badges
+  let priceCompHtml = '';
+  if (l.prev_price && parseFloat(l.prev_price) !== parseFloat(l.price_value)) {
+    const prev = parseFloat(l.prev_price), curr = parseFloat(l.price_value);
+    const diff = curr - prev, pct = prev ? ((diff / prev) * 100).toFixed(1) : 0;
+    priceCompHtml += diff < 0
+      ? `<span class="price-drop-badge drop">🔻 ${pct}%</span>`
+      : `<span class="price-drop-badge rise">🔺 +${pct}%</span>`;
+  }
+  if (l.job_avg_price && l.price_value) {
+    const avg = parseFloat(l.job_avg_price), price = parseFloat(l.price_value);
+    const diff = ((price - avg) / avg * 100).toFixed(0);
+    if (Math.abs(diff) < 3) priceCompHtml += '<span class="price-drop-badge" style="background:rgba(100,100,100,0.15);color:var(--text-muted)">≈ avg</span>';
+    else priceCompHtml += diff < 0
+      ? `<span class="price-drop-badge drop">${diff}% avg</span>`
+      : `<span class="price-drop-badge rise">+${diff}% avg</span>`;
+  }
+
+  // Price changes / velocity
+  const changes = parseInt(l.price_changes) || 0;
+  let velocityBadge = '';
+  if (changes >= 3) velocityBadge = '<span style="color:var(--success);font-size:0.72rem;margin-left:4px">🔻🔻🔻 Motivated seller</span>';
+  else if (changes >= 2) velocityBadge = '<span style="color:var(--warning);font-size:0.72rem;margin-left:4px">🔻🔻</span>';
+
+  // Listing age
+  let ageText = '';
+  if (l.posted_at) {
+    const days = Math.floor((Date.now() - new Date(l.posted_at).getTime()) / 86400000);
+    if (days === 0) ageText = '🆕 Today';
+    else if (days === 1) ageText = '1 day ago';
+    else if (days < 7) ageText = `${days} days ago`;
+    else if (days < 30) ageText = `${Math.floor(days / 7)}w ago`;
+    else ageText = `${Math.floor(days / 30)}mo ago`;
+  }
+
+  return `
+    <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
+      ${imgSrc ? `<img class="listing-card-img" src="${imgSrc}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
+      <div class="listing-card-body">
+        <div class="listing-card-title">
+          <a href="${l.url}" target="_blank" style="color:inherit;text-decoration:none">${esc(l.title || l.slug)}</a>
+        </div>
+        <div class="listing-card-price">
+          ${esc(l.price || '')} ${priceCompHtml} ${velocityBadge}
+        </div>
+        ${l.sub_location ? `<div style="font-size:0.75rem;color:var(--text-muted)">📍 ${esc(l.sub_location)}${l.location ? ', ' + esc(l.location) : ''}</div>` : ''}
+        ${ageText ? `<div style="font-size:0.72rem;color:var(--text-muted)">🕐 Posted ${ageText}</div>` : ''}
+        <div class="listing-card-details">
+          ${l.size_text ? `<div class="listing-card-detail-row"><span class="listing-card-detail-key">Size</span><span>${esc(l.size_text)}</span></div>` : ''}
+          ${l.location && !l.sub_location ? `<div class="listing-card-detail-row"><span class="listing-card-detail-key">Location</span><span>${esc(l.location)}</span></div>` : ''}
+          ${l.phone ? `<div class="listing-card-detail-row"><span class="listing-card-detail-key">Phone</span><span>${esc(l.phone)}</span></div>` : ''}
+          ${detailHtml}
+        </div>
+      </div>
+      <div class="listing-card-footer">
+        <span class="${statusClass}">${statusLabel}</span>
+        <span>${l.job_name || ''} · ${new Date(l.first_seen_at).toLocaleDateString()}</span>
+        <button class="btn btn-sm btn-ghost" onclick="showPriceChart(${l.id}, '${esc(l.title || l.slug)}')" title="Price history">📈</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleMatch(${l.id})" title="${l.matched_log ? 'Unmatch' : 'Match'}">${l.matched_log ? '⭐' : '☆'}</button>
+        ${l.status !== 'excluded' ? `<button class="btn btn-sm btn-ghost" onclick="excludeListing(${l.id})" title="Exclude">⛔</button>` : ''}
+      </div>
+    </div>`;
+}
+
 /* ─── Jobs View ────────────────────────────────────────────── */
 async function loadJobs() {
   loadStats();
@@ -202,66 +280,7 @@ async function loadListings() {
     return;
   }
 
-  grid.innerHTML = data.listings.map(l => {
-    const imgSrc = l.image_path ? `/api/images/${l.image_path}` :
-      (l.image_urls && l.image_urls.length > 0 ? l.image_urls[0] : '');
-    const detailFields = l.detail_fields || {};
-    const detailHtml = Object.entries(detailFields).slice(0, 5).map(([k, v]) =>
-      `<div class="listing-card-detail-row"><span class="listing-card-detail-key">${esc(k)}</span><span>${esc(v)}</span></div>`
-    ).join('');
-
-    const statusClass = l.status === 'sold' ? 'listing-badge-sold'
-      : l.status === 'excluded' ? 'listing-badge-sold'
-        : 'listing-badge-active';
-    const statusLabel = l.status === 'sold' ? '🔴 Sold'
-      : l.status === 'excluded' ? '⛔ Excluded'
-        : '🟢 Active';
-
-    return `
-      <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
-        ${imgSrc ? `<img class="listing-card-img" src="${imgSrc}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
-        <div class="listing-card-body">
-          <div class="listing-card-title">
-            <a href="${l.url}" target="_blank" style="color:inherit;text-decoration:none">${esc(l.title || l.slug)}</a>
-          </div>
-          <div class="listing-card-price">
-            ${esc(l.price || '')}
-            ${l.prev_price && parseFloat(l.prev_price) !== parseFloat(l.price_value) ? (() => {
-        const prev = parseFloat(l.prev_price);
-        const curr = parseFloat(l.price_value);
-        const diff = curr - prev;
-        const pct = prev ? ((diff / prev) * 100).toFixed(1) : 0;
-        return diff < 0
-          ? `<span class="price-drop-badge drop">🔻 ${pct}%</span>`
-          : `<span class="price-drop-badge rise">🔺 +${pct}%</span>`;
-      })() : ''}
-            ${l.job_avg_price && l.price_value ? (() => {
-        const avg = parseFloat(l.job_avg_price);
-        const price = parseFloat(l.price_value);
-        const diff = ((price - avg) / avg * 100).toFixed(0);
-        if (Math.abs(diff) < 3) return '<span class="price-drop-badge" style="background:rgba(100,100,100,0.15);color:var(--text-muted)">≈ avg</span>';
-        return diff < 0
-          ? `<span class="price-drop-badge drop">${diff}% avg</span>`
-          : `<span class="price-drop-badge rise">+${diff}% avg</span>`;
-      })() : ''}
-          </div>
-          <div class="listing-card-details">
-            ${l.size_text ? `<div class="listing-card-detail-row"><span class="listing-card-detail-key">Size</span><span>${esc(l.size_text)}</span></div>` : ''}
-            ${l.location ? `<div class="listing-card-detail-row"><span class="listing-card-detail-key">Location</span><span>${esc(l.location)}</span></div>` : ''}
-            ${l.phone ? `<div class="listing-card-detail-row"><span class="listing-card-detail-key">Phone</span><span>${esc(l.phone)}</span></div>` : ''}
-            ${detailHtml}
-          </div>
-        </div>
-        <div class="listing-card-footer">
-          <span class="${statusClass}">${statusLabel}</span>
-          <span>${l.job_name || ''} · ${new Date(l.first_seen_at).toLocaleDateString()}</span>
-          <button class="btn btn-sm btn-ghost" onclick="showPriceChart(${l.id}, '${esc(l.title || l.slug)}')" title="Price history">📈</button>
-          <button class="btn btn-sm btn-ghost" onclick="toggleMatch(${l.id})" title="${l.matched_log ? 'Unmatch' : 'Mark as matched'}">${l.matched_log ? '⭐' : '☆'}</button>
-          ${l.status !== 'excluded' ? `<button class="btn btn-sm btn-ghost" onclick="excludeListing(${l.id})" title="Exclude listing">⛔</button>` : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
+  grid.innerHTML = data.listings.map(l => renderListingCard(l)).join('');
 
   // Pagination
   const totalPages = Math.ceil(data.total / 30);
@@ -824,24 +843,27 @@ function openJobDetail(id, name) {
 
 async function loadJobDetail(id) {
   try {
-    const [analytics, history, listingsResp] = await Promise.all([
+    const [analytics, history] = await Promise.all([
       api('GET', `/jobs/${id}/analytics`),
       api('GET', `/jobs/${id}/price-history`),
-      api('GET', `/listings?job_id=${id}&matched_only=true&limit=100`),
     ]);
 
     renderJobStats(analytics);
     renderPriceChart(history);
 
+    // Store group fields globally for custom rule builder
+    window._jobGroupFields = analytics.availableGroupFields || [];
+
     // Populate group-by dropdown
     const select = document.getElementById('group-by-select');
     select.innerHTML = '<option value="">None</option>' +
-      analytics.availableGroupFields.map(f => `<option value="${f}">${f}</option>`).join('');
+      window._jobGroupFields.map(f => `<option value="${f}">${f}</option>`).join('');
 
     document.getElementById('job-groups-grid').innerHTML = '';
 
-    // Render listings with age
-    renderJobListings(listingsResp.listings || listingsResp);
+    // Load listings via filter bar
+    jobListingPage = 0;
+    loadJobListingsFiltered();
   } catch (err) {
     console.error('Failed to load job detail:', err);
   }
@@ -952,15 +974,24 @@ async function loadJobGroups() {
     document.getElementById('job-groups-grid').innerHTML = '';
     return;
   }
-  const groups = await api('GET', `/jobs/${currentJobId}/groups?field=${encodeURIComponent(field)}`);
-  renderJobGroups(groups, field);
+  try {
+    const groups = await api('GET', `/jobs/${currentJobId}/groups?field=${encodeURIComponent(field)}`);
+    renderJobGroups(groups);
+  } catch (err) {
+    document.getElementById('job-groups-grid').innerHTML = `<p style="color:var(--danger)">Error loading groups: ${err.message}</p>`;
+  }
 }
 
-function renderJobGroups(groups, field) {
-  document.getElementById('job-groups-grid').innerHTML = groups.map(g => `
-    <div class="job-card" style="padding:14px">
+function renderJobGroups(groups) {
+  const grid = document.getElementById('job-groups-grid');
+  if (!groups || groups.length === 0) {
+    grid.innerHTML = '<p style="color:var(--text-muted)">No groups found.</p>';
+    return;
+  }
+  grid.innerHTML = groups.map(g => `
+    <div class="job-card" style="padding:14px;cursor:default">
       <div class="job-card-header">
-        <span class="job-card-title" style="font-size:0.95rem">${esc(g.group_key || 'Unknown')}</span>
+        <span class="job-card-title" style="font-size:0.95rem">${esc(String(g.group_key || 'Unknown'))}</span>
         <span class="job-card-badge badge-active">${g.count} listings</span>
       </div>
       <div class="job-card-stats" style="margin-top:8px">
@@ -976,9 +1007,93 @@ function renderJobGroups(groups, field) {
           <div class="stat-value">${formatPrice(parseFloat(g.max_price))}</div>
           <div class="stat-label">Max</div>
         </div>
+        <div class="stat">
+          <div class="stat-value">${formatPrice(parseFloat(g.max_price) - parseFloat(g.min_price))}</div>
+          <div class="stat-label">Spread</div>
+        </div>
       </div>
     </div>
   `).join('');
+}
+
+/* ─── Custom Group Rules ──────────────────────────────────── */
+let customGroupRules = [];
+
+function addCustomGroupRule() {
+  const fields = (window._jobGroupFields || []).map(f => `<option value="${f}">${f}</option>`).join('');
+  customGroupRules.push({ name: '', field: '', op: 'contains', value: '' });
+  renderCustomGroupRules();
+}
+
+function renderCustomGroupRules() {
+  const container = document.getElementById('custom-group-rules');
+  const fields = window._jobGroupFields || [];
+  const fieldOpts = '<option value="title">Title</option>' + fields.map(f => `<option value="${f}">${f}</option>`).join('');
+  container.innerHTML = customGroupRules.map((r, i) => `
+    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap">
+      <input class="form-input" style="width:100px" placeholder="Group name" value="${esc(r.name)}"
+        onchange="customGroupRules[${i}].name=this.value">
+      <select class="form-input" style="width:120px" onchange="customGroupRules[${i}].field=this.value">
+        ${fieldOpts.replace(`value="${r.field}"`, `value="${r.field}" selected`)}
+      </select>
+      <select class="form-input" style="width:110px" onchange="customGroupRules[${i}].op=this.value">
+        <option value="contains" ${r.op === 'contains' ? 'selected' : ''}>contains</option>
+        <option value="equals" ${r.op === 'equals' ? 'selected' : ''}>equals</option>
+        <option value="starts_with" ${r.op === 'starts_with' ? 'selected' : ''}>starts with</option>
+        <option value="regex" ${r.op === 'regex' ? 'selected' : ''}>regex</option>
+      </select>
+      <input class="form-input" style="width:120px" placeholder="Value" value="${esc(r.value)}"
+        onchange="customGroupRules[${i}].value=this.value">
+      <button class="btn btn-sm btn-danger" onclick="customGroupRules.splice(${i},1);renderCustomGroupRules()">✕</button>
+    </div>
+  `).join('');
+}
+
+async function applyCustomGroups() {
+  if (!currentJobId || customGroupRules.length === 0) return;
+  const validRules = customGroupRules.filter(r => r.name && r.value);
+  if (validRules.length === 0) { alert('Add at least one rule with name and value'); return; }
+  try {
+    const groups = await api('POST', `/jobs/${currentJobId}/custom-groups`, { rules: validRules });
+    renderJobGroups(groups);
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+/* ─── Job Detail Filtered Listings ────────────────────────── */
+let jobListingPage = 0;
+
+async function loadJobListingsFiltered() {
+  if (!currentJobId) return;
+  const search = document.getElementById('job-listing-search').value;
+  const status = document.getElementById('job-listing-status').value;
+  const sort = document.getElementById('job-listing-sort').value;
+  const matchedOnly = document.getElementById('job-listing-matched').checked;
+
+  const params = new URLSearchParams({
+    job_id: currentJobId,
+    limit: 50,
+    offset: jobListingPage * 50,
+  });
+  if (search) params.set('search', search);
+  if (status) params.set('status', status);
+  if (sort) params.set('sort', sort);
+  if (matchedOnly) params.set('matched_only', 'true');
+
+  const data = await api('GET', `/listings?${params}`);
+  const listings = data.listings || data;
+  renderJobListings(listings);
+
+  // Pagination
+  if (data.total) {
+    const totalPages = Math.ceil(data.total / 50);
+    document.getElementById('job-listings-pagination').innerHTML = `
+      <button class="btn btn-sm btn-ghost" onclick="jobListingPage=Math.max(0,jobListingPage-1);loadJobListingsFiltered()" ${jobListingPage === 0 ? 'disabled' : ''}>← Prev</button>
+      <span>Page ${jobListingPage + 1} of ${totalPages}</span>
+      <button class="btn btn-sm btn-ghost" onclick="jobListingPage++;loadJobListingsFiltered()" ${jobListingPage >= totalPages - 1 ? 'disabled' : ''}>Next →</button>
+    `;
+  }
 }
 
 function renderJobListings(listings) {
@@ -987,51 +1102,7 @@ function renderJobListings(listings) {
     grid.innerHTML = '<p style="color:var(--text-muted)">No matched listings yet.</p>';
     return;
   }
-
-  grid.innerHTML = listings.map(l => {
-    const statusClass = l.status === 'sold' ? 'badge-danger' : l.status === 'excluded' ? 'badge-warning' : 'badge-active';
-    const statusLabel = l.status === 'sold' ? '🔴 Sold' : l.status === 'excluded' ? '⛔ Excluded' : '🟢 Active';
-    const priceChange = l.price_changes > 0 ? ` (${l.price_changes} changes)` : '';
-
-    // Listing age
-    let ageText = '';
-    if (l.posted_at) {
-      const days = Math.floor((Date.now() - new Date(l.posted_at).getTime()) / 86400000);
-      if (days === 0) ageText = '🆕 Today';
-      else if (days === 1) ageText = '1 day ago';
-      else if (days < 7) ageText = `${days} days ago`;
-      else if (days < 30) ageText = `${Math.floor(days / 7)}w ago`;
-      else ageText = `${Math.floor(days / 30)}mo ago`;
-    }
-
-    // Price drop velocity
-    let dropBadge = '';
-    if (l.price_changes >= 3) dropBadge = '<span style="color:var(--success);font-size:0.72rem;margin-left:4px">🔻🔻🔻 Motivated seller</span>';
-    else if (l.price_changes >= 2) dropBadge = '<span style="color:var(--warning);font-size:0.72rem;margin-left:4px">🔻🔻</span>';
-
-    const detailHtml = l.detail_fields && typeof l.detail_fields === 'object'
-      ? Object.entries(l.detail_fields).slice(0, 4).map(([k, v]) =>
-        `<div class="listing-card-detail-row"><span class="listing-card-detail-key">${esc(k)}</span><span>${esc(String(v))}</span></div>`
-      ).join('')
-      : '';
-
-    return `
-      <div class="listing-card ${l.matched_log ? '' : 'listing-unmatched'}">
-        ${l.image_path ? `<img src="/api/images/${l.image_path}" class="listing-card-img" loading="lazy">` : ''}
-        <div class="listing-card-body">
-          <a class="listing-card-title" href="${l.url}" target="_blank">${esc(l.title || l.slug)}</a>
-          <div class="listing-card-price">${esc(l.price || '')}${priceChange}${dropBadge}</div>
-          ${l.sub_location ? `<div style="font-size:0.75rem;color:var(--text-muted)">📍 ${esc(l.sub_location)}${l.location ? ', ' + esc(l.location) : ''}</div>` : ''}
-          ${ageText ? `<div style="font-size:0.72rem;color:var(--text-muted)">🕐 Posted ${ageText}</div>` : ''}
-          ${detailHtml}
-        </div>
-        <div class="listing-card-footer">
-          <span class="${statusClass}">${statusLabel}</span>
-          <button class="btn btn-sm btn-ghost" onclick="toggleMatch(${l.id})" title="${l.matched_log ? 'Unmatch' : 'Match'}">${l.matched_log ? '⭐' : '☆'}</button>
-          ${l.status !== 'excluded' ? `<button class="btn btn-sm btn-ghost" onclick="excludeListing(${l.id})" title="Exclude">⛔</button>` : ''}
-        </div>
-      </div>`;
-  }).join('');
+  grid.innerHTML = listings.map(l => renderListingCard(l)).join('');
 }
 
 /* ─── Init ─────────────────────────────────────────────────── */

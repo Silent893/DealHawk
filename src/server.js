@@ -219,20 +219,98 @@ app.get('/api/jobs/:id/groups', async (req, res) => {
     if (!field) return res.status(400).json({ error: 'field param required' });
     try {
         const safeField = field.replace(/[^a-zA-Z0-9_ ]/g, '');
+        // Handle both JSONB and text-stored JSON
         const result = await db.query(`
             SELECT
-                detail_fields->>'${safeField}' AS group_key,
+                (CASE WHEN pg_typeof(detail_fields) = 'jsonb'::regtype
+                      THEN detail_fields
+                      ELSE detail_fields::jsonb END)->>'${safeField}' AS group_key,
                 COUNT(*) AS count,
                 ROUND(AVG(price_value)) AS avg_price,
                 ROUND(MIN(price_value)) AS min_price,
                 ROUND(MAX(price_value)) AS max_price
             FROM listings
-            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND detail_fields IS NOT NULL
+            WHERE job_id = $1 AND matched_log = true AND status = 'active'
+              AND detail_fields IS NOT NULL AND price_value IS NOT NULL
             GROUP BY group_key
-            HAVING detail_fields->>'${safeField}' IS NOT NULL
+            HAVING (CASE WHEN pg_typeof(detail_fields) = 'jsonb'::regtype
+                         THEN detail_fields
+                         ELSE detail_fields::jsonb END)->>'${safeField}' IS NOT NULL
             ORDER BY count DESC
         `, [jobId]);
         res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Custom grouping with contains-based rules
+app.post('/api/jobs/:id/custom-groups', async (req, res) => {
+    const jobId = req.params.id;
+    const { rules } = req.body; // [{ name: "EX", field: "Trim", op: "contains", value: "EX" }, ...]
+    if (!rules || !Array.isArray(rules)) return res.status(400).json({ error: 'rules array required' });
+    try {
+        // Get all matched+active listings
+        const listingsResult = await db.query(`
+            SELECT id, title, slug, price_value, detail_fields, posted_at
+            FROM listings
+            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND price_value IS NOT NULL
+        `, [jobId]);
+
+        const groups = {};
+        const ungrouped = [];
+
+        for (const listing of listingsResult.rows) {
+            let df = listing.detail_fields;
+            if (typeof df === 'string') try { df = JSON.parse(df); } catch { df = {}; }
+            if (!df) df = {};
+
+            let matched = false;
+            for (const rule of rules) {
+                const fieldVal = String(df[rule.field] || listing[rule.field] || listing.title || '');
+                let match = false;
+                switch (rule.op) {
+                    case 'contains': match = fieldVal.toLowerCase().includes(rule.value.toLowerCase()); break;
+                    case 'equals': match = fieldVal.toLowerCase() === rule.value.toLowerCase(); break;
+                    case 'starts_with': match = fieldVal.toLowerCase().startsWith(rule.value.toLowerCase()); break;
+                    case 'regex': try { match = new RegExp(rule.value, 'i').test(fieldVal); } catch { } break;
+                }
+                if (match) {
+                    if (!groups[rule.name]) groups[rule.name] = { name: rule.name, listings: [], total: 0, sum: 0, min: Infinity, max: 0 };
+                    groups[rule.name].listings.push(listing.id);
+                    groups[rule.name].total++;
+                    groups[rule.name].sum += parseFloat(listing.price_value);
+                    groups[rule.name].min = Math.min(groups[rule.name].min, parseFloat(listing.price_value));
+                    groups[rule.name].max = Math.max(groups[rule.name].max, parseFloat(listing.price_value));
+                    matched = true;
+                    break; // First matching rule wins
+                }
+            }
+            if (!matched) ungrouped.push(listing.id);
+        }
+
+        const result = Object.values(groups).map(g => ({
+            group_key: g.name,
+            count: g.total,
+            avg_price: Math.round(g.sum / g.total),
+            min_price: g.min === Infinity ? 0 : g.min,
+            max_price: g.max,
+            listing_ids: g.listings,
+        }));
+
+        if (ungrouped.length > 0) {
+            const ungroupedPrices = listingsResult.rows.filter(l => ungrouped.includes(l.id)).map(l => parseFloat(l.price_value));
+            result.push({
+                group_key: 'Other',
+                count: ungrouped.length,
+                avg_price: Math.round(ungroupedPrices.reduce((a, b) => a + b, 0) / ungroupedPrices.length),
+                min_price: Math.min(...ungroupedPrices),
+                max_price: Math.max(...ungroupedPrices),
+                listing_ids: ungrouped,
+            });
+        }
+
+        res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
