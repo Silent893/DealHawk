@@ -260,4 +260,4 @@ function matchesRules(listing, rules) {
     return true;
 }
 
-module.exports = { scrapeDetail, matchesRules, checkListing };
+module.exports = { scrapeDetail, matchesRules, checkListing, downloadImage };

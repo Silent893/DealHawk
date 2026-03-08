@@ -14,6 +14,50 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const IMAGES_DIR = config.imagesDir || path.join(__dirname, '..', 'data', 'images');
 app.use('/api/images', express.static(IMAGES_DIR));
 
+const fs = require('fs');
+const { downloadImage } = require('./detail-scraper');
+
+// Re-download missing images
+app.post('/api/images/redownload', async (req, res) => {
+    try {
+        // Ensure images directory exists
+        if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true });
+
+        const result = await db.query(`
+            SELECT id, slug, image_urls, image_path
+            FROM listings WHERE image_urls IS NOT NULL
+        `);
+
+        let downloaded = 0, skipped = 0, failed = 0;
+
+        for (const row of result.rows) {
+            // Check if file already exists on disk
+            if (row.image_path && fs.existsSync(path.join(IMAGES_DIR, row.image_path))) {
+                skipped++;
+                continue;
+            }
+
+            // Parse image_urls
+            let urls = row.image_urls;
+            if (typeof urls === 'string') try { urls = JSON.parse(urls); } catch { continue; }
+            if (!Array.isArray(urls) || urls.length === 0) continue;
+
+            try {
+                const filename = await downloadImage(urls[0], row.slug);
+                await db.query('UPDATE listings SET image_path = $1 WHERE id = $2', [filename, row.id]);
+                downloaded++;
+                if (downloaded % 10 === 0) console.log(`  [redownload] ${downloaded} images downloaded...`);
+            } catch (err) {
+                failed++;
+            }
+        }
+
+        console.log(`[redownload] Done: ${downloaded} downloaded, ${skipped} skipped, ${failed} failed`);
+        res.json({ downloaded, skipped, failed, total: result.rows.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 // ─── Version ────────────────────────────────────────────────────
 
 const pkg = require('../package.json');
