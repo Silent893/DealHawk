@@ -92,16 +92,21 @@ app.get('/api/stats', async (req, res) => {
 app.get('/api/jobs/:id/analytics', async (req, res) => {
     const jobId = req.params.id;
     try {
+        // Get job to check land mode
+        const jobResult = await db.query('SELECT is_land_mode FROM jobs WHERE id = $1', [jobId]);
+        const isLandMode = jobResult.rows[0]?.is_land_mode || false;
+        const pCol = isLandMode ? 'price_per_perch' : 'price_value';
+
         // Avg price (matched + active only)
         const avgResult = await db.query(`
             SELECT
                 COUNT(*) AS matched_count,
-                ROUND(AVG(price_value)) AS avg_price,
-                ROUND(MIN(price_value)) AS min_price,
-                ROUND(MAX(price_value)) AS max_price,
-                ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price_value)) AS median_price
+                ROUND(AVG(${pCol})) AS avg_price,
+                ROUND(MIN(${pCol})) AS min_price,
+                ROUND(MAX(${pCol})) AS max_price,
+                ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${pCol})) AS median_price
             FROM listings
-            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND price_value IS NOT NULL
+            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND ${pCol} IS NOT NULL
         `, [jobId]);
 
         // Time-to-sell (avg days from posted_at to sold_at for sold listings)
@@ -185,6 +190,7 @@ app.get('/api/jobs/:id/analytics', async (req, res) => {
             : null;
 
         res.json({
+            isLandMode,
             price: {
                 avg: parseFloat(stats.avg_price) || null,
                 min: parseFloat(stats.min_price) || null,
@@ -285,8 +291,11 @@ app.get('/api/jobs/:id/groups', async (req, res) => {
     const field = req.query.field;
     if (!field) return res.status(400).json({ error: 'field param required' });
     try {
+        const jobResult = await db.query('SELECT is_land_mode FROM jobs WHERE id = $1', [jobId]);
+        const isLandMode = jobResult.rows[0]?.is_land_mode || false;
+
         const result = await db.query(`
-            SELECT id, price_value, detail_fields
+            SELECT id, price_value, price_per_perch, detail_fields
             FROM listings
             WHERE job_id = $1 AND matched_log = true AND status = 'active'
               AND detail_fields IS NOT NULL AND price_value IS NOT NULL
@@ -301,7 +310,7 @@ app.get('/api/jobs/:id/groups', async (req, res) => {
             const key = String(df[field] || '').trim();
             if (!key) continue;
             if (!groups[key]) groups[key] = { count: 0, sum: 0, min: Infinity, max: 0, ids: [] };
-            const price = parseFloat(row.price_value);
+            const price = isLandMode ? parseFloat(row.price_per_perch || row.price_value) : parseFloat(row.price_value);
             groups[key].count++;
             groups[key].sum += price;
             groups[key].min = Math.min(groups[key].min, price);
@@ -332,9 +341,12 @@ app.post('/api/jobs/:id/custom-groups', async (req, res) => {
     const { rules } = req.body; // [{ name: "EX", field: "Trim", op: "contains", value: "EX" }, ...]
     if (!rules || !Array.isArray(rules)) return res.status(400).json({ error: 'rules array required' });
     try {
+        const jobResult = await db.query('SELECT is_land_mode FROM jobs WHERE id = $1', [jobId]);
+        const isLandMode = jobResult.rows[0]?.is_land_mode || false;
+
         // Get all matched+active listings
         const listingsResult = await db.query(`
-            SELECT id, title, slug, price_value, detail_fields, posted_at
+            SELECT id, title, slug, price_value, price_per_perch, detail_fields, posted_at
             FROM listings
             WHERE job_id = $1 AND matched_log = true AND status = 'active' AND price_value IS NOT NULL
         `, [jobId]);
@@ -359,11 +371,12 @@ app.post('/api/jobs/:id/custom-groups', async (req, res) => {
                 }
                 if (match) {
                     if (!groups[rule.name]) groups[rule.name] = { name: rule.name, listings: [], total: 0, sum: 0, min: Infinity, max: 0 };
+                    const price = isLandMode ? parseFloat(listing.price_per_perch || listing.price_value) : parseFloat(listing.price_value);
                     groups[rule.name].listings.push(listing.id);
                     groups[rule.name].total++;
-                    groups[rule.name].sum += parseFloat(listing.price_value);
-                    groups[rule.name].min = Math.min(groups[rule.name].min, parseFloat(listing.price_value));
-                    groups[rule.name].max = Math.max(groups[rule.name].max, parseFloat(listing.price_value));
+                    groups[rule.name].sum += price;
+                    groups[rule.name].min = Math.min(groups[rule.name].min, price);
+                    groups[rule.name].max = Math.max(groups[rule.name].max, price);
                     matched = true;
                     break; // First matching rule wins
                 }
@@ -381,7 +394,8 @@ app.post('/api/jobs/:id/custom-groups', async (req, res) => {
         }));
 
         if (ungrouped.length > 0) {
-            const ungroupedPrices = listingsResult.rows.filter(l => ungrouped.includes(l.id)).map(l => parseFloat(l.price_value));
+            const priceGetter = l => isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+            const ungroupedPrices = listingsResult.rows.filter(l => ungrouped.includes(l.id)).map(priceGetter);
             result.push({
                 group_key: 'Other',
                 count: ungrouped.length,
@@ -440,7 +454,7 @@ app.get('/api/jobs', async (req, res) => {
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND matched_log = true) AS matched_count,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'active') AS active_count,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold') AS sold_count,
-        (SELECT ROUND(AVG(price_value)) FROM listings WHERE job_id = j.id AND matched_log = true AND status = 'active' AND price_value IS NOT NULL) AS avg_price,
+        (SELECT ROUND(AVG(CASE WHEN j.is_land_mode THEN price_per_perch ELSE price_value END)) FROM listings WHERE job_id = j.id AND matched_log = true AND status = 'active' AND price_value IS NOT NULL) AS avg_price,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND first_seen_at > NOW() - INTERVAL '7 days') AS new_7d,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold' AND sold_at > NOW() - INTERVAL '7 days') AS sold_7d,
         (SELECT COUNT(*) FROM (
@@ -459,14 +473,14 @@ app.get('/api/jobs', async (req, res) => {
 });
 
 app.post('/api/jobs', async (req, res) => {
-    const { name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages } = req.body;
+    const { name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, is_land_mode } = req.body;
     if (!name || !url) {
         return res.status(400).json({ error: 'Name and URL are required' });
     }
     try {
         const result = await db.query(
-            `INSERT INTO jobs (name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, last_run_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+            `INSERT INTO jobs (name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, is_land_mode, last_run_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
        RETURNING *`,
             [name, url, category || null,
                 JSON.stringify(card_fields || []),
@@ -474,7 +488,8 @@ app.post('/api/jobs', async (req, res) => {
                 JSON.stringify(deep_dive_rules || []),
                 JSON.stringify(log_rules || []),
                 frequency_hours || 24,
-                max_pages || 2]
+                max_pages || 2,
+                is_land_mode || false]
         );
         const job = result.rows[0];
         res.json(job);
@@ -489,7 +504,7 @@ app.post('/api/jobs', async (req, res) => {
 
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, url, category, deep_dive_rules, log_rules, frequency_hours, active } = req.body;
+    const { name, url, category, deep_dive_rules, log_rules, frequency_hours, active, is_land_mode } = req.body;
     try {
         const result = await db.query(
             `UPDATE jobs SET
@@ -499,12 +514,13 @@ app.put('/api/jobs/:id', async (req, res) => {
          deep_dive_rules = COALESCE($4, deep_dive_rules),
          log_rules = COALESCE($5, log_rules),
          frequency_hours = COALESCE($6, frequency_hours),
-         active = COALESCE($7, active)
-       WHERE id = $8 RETURNING *`,
+         active = COALESCE($7, active),
+         is_land_mode = COALESCE($8, is_land_mode)
+       WHERE id = $9 RETURNING *`,
             [name, url, category,
                 deep_dive_rules ? JSON.stringify(deep_dive_rules) : null,
                 log_rules ? JSON.stringify(log_rules) : null,
-                frequency_hours, active, id]
+                frequency_hours, active, is_land_mode, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
         res.json(result.rows[0]);
@@ -589,11 +605,11 @@ app.get('/api/listings', async (req, res) => {
         const orderBy = `CASE WHEN l.status = 'active' THEN 0 ELSE 1 END, ${sortMap[sort] || sortMap.newest}`;
 
         const result = await db.query(
-            `SELECT l.*, j.name as job_name,
+            `SELECT l.*, j.name as job_name, j.is_land_mode as job_is_land_mode,
               (SELECT ph.price_value FROM price_history ph
                WHERE ph.listing_id = l.id ORDER BY ph.recorded_at DESC LIMIT 1 OFFSET 1) AS prev_price,
               (SELECT COUNT(*) - 1 FROM price_history ph WHERE ph.listing_id = l.id) AS price_changes,
-              (SELECT AVG(l2.price_value) FROM listings l2
+              (SELECT AVG(CASE WHEN j.is_land_mode THEN l2.price_per_perch ELSE l2.price_value END) FROM listings l2
                WHERE l2.job_id = l.job_id AND l2.price_value IS NOT NULL AND l2.status = 'active') AS job_avg_price
              FROM listings l
              LEFT JOIN jobs j ON l.job_id = j.id
@@ -617,16 +633,20 @@ app.get('/api/listings', async (req, res) => {
 
 app.get('/api/jobs/:id/analytics', async (req, res) => {
     try {
+        const jobResult2 = await db.query('SELECT is_land_mode FROM jobs WHERE id = $1', [req.params.id]);
+        const isLandMode2 = jobResult2.rows[0]?.is_land_mode || false;
+        const pCol2 = isLandMode2 ? 'price_per_perch' : 'price_value';
+
         const result = await db.query(`
           SELECT
             COUNT(*) FILTER (WHERE status = 'active') AS active_count,
             COUNT(*) FILTER (WHERE status = 'sold') AS sold_count,
             COUNT(*) FILTER (WHERE matched_log = true) AS matched_count,
-            ROUND(AVG(price_value) FILTER (WHERE price_value IS NOT NULL AND status = 'active')) AS avg_price,
-            MIN(price_value) FILTER (WHERE price_value IS NOT NULL AND status = 'active') AS min_price,
-            MAX(price_value) FILTER (WHERE price_value IS NOT NULL AND status = 'active') AS max_price,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price_value)
-              FILTER (WHERE price_value IS NOT NULL AND status = 'active') AS median_price
+            ROUND(AVG(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active')) AS avg_price,
+            MIN(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS min_price,
+            MAX(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS max_price,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${pCol2})
+              FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS median_price
           FROM listings WHERE job_id = $1
         `, [req.params.id]);
         res.json(result.rows[0]);

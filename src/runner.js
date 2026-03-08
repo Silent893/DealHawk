@@ -6,6 +6,26 @@ const { scrapeDetail, matchesRules, checkListing } = require('./detail-scraper')
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
+ * Compute normalized price values from raw price, type, and land size.
+ */
+function computeNormalizedPrices(priceVal, priceType, sizePerches) {
+    let pricePerPerch = null;
+    let totalPrice = null;
+    if (priceVal) {
+        if (priceType === 'per_perch') {
+            pricePerPerch = priceVal;
+            totalPrice = sizePerches ? Math.round(priceVal * sizePerches) : null;
+        } else if (priceType === 'total') {
+            totalPrice = priceVal;
+            pricePerPerch = sizePerches ? Math.round(priceVal / sizePerches) : null;
+        } else {
+            totalPrice = priceVal;
+        }
+    }
+    return { pricePerPerch, totalPrice };
+}
+
+/**
  * Parse ikman posted date text like "08 Mar 7:42 am" into a Date.
  */
 function parsePostedDate(text) {
@@ -83,10 +103,15 @@ async function runJob(job) {
             // Skip excluded listings entirely
             if (excludedSlugs.has(listing.slug)) continue;
 
+            const { pricePerPerch, totalPrice } = computeNormalizedPrices(
+                listing.priceValue, listing.priceType, listing.sizePerches
+            );
+
             const insertResult = await db.query(
                 `INSERT INTO listings (job_id, slug, title, price, price_value, price_type,
-           size_text, size_perches, location, url, is_member, posted_text, status, last_seen_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', NOW())
+           size_text, size_perches, location, url, is_member, posted_text, status, last_seen_at,
+           price_per_perch, total_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', NOW(), $13, $14)
          ON CONFLICT (slug) DO UPDATE SET
            last_seen_at = NOW(),
            status = CASE WHEN listings.status = 'excluded' THEN 'excluded' ELSE listings.status END
@@ -96,6 +121,7 @@ async function runJob(job) {
                     listing.priceValue, listing.priceType, listing.sizeText,
                     listing.sizePerches, listing.location, listing.url,
                     listing.isMember, listing.postedText,
+                    pricePerPerch, totalPrice,
                 ]
             );
 
@@ -156,7 +182,7 @@ async function runJob(job) {
 
         // ── Phase 2: Re-check matched active listings ──────────────
         const activeListings = await db.query(
-            `SELECT id, slug, title, url, price_value, price_type, price
+            `SELECT id, slug, title, url, price_value, price_type, price, size_perches, price_per_perch
        FROM listings
        WHERE job_id = $1 AND status = 'active' AND matched_log = true
        ORDER BY id`,
@@ -187,18 +213,32 @@ async function runJob(job) {
                             [listing.id, check.priceValue, check.priceType, check.priceText]
                         );
 
-                        const oldPrice = parseFloat(listing.price_value);
-                        if (oldPrice && check.priceValue !== oldPrice) {
+                        // Compute normalized prices for comparison
+                        const { pricePerPerch: newPPP, totalPrice: newTP } = computeNormalizedPrices(
+                            check.priceValue, check.priceType, parseFloat(listing.size_perches) || null
+                        );
+
+                        // For land mode: compare price_per_perch; otherwise compare raw price_value
+                        const oldCompare = job.is_land_mode
+                            ? parseFloat(listing.price_per_perch)
+                            : parseFloat(listing.price_value);
+                        const newCompare = job.is_land_mode
+                            ? newPPP
+                            : check.priceValue;
+
+                        if (oldCompare && newCompare && newCompare !== oldCompare) {
                             priceChanges++;
-                            const diff = check.priceValue - oldPrice;
-                            const pct = ((diff / oldPrice) * 100).toFixed(1);
+                            const diff = newCompare - oldCompare;
+                            const pct = ((diff / oldCompare) * 100).toFixed(1);
                             const arrow = diff < 0 ? '🔻' : '🔺';
+                            const label = job.is_land_mode ? '/perch' : '';
                             console.log(`    ${arrow} PRICE CHANGE: ${listing.title || listing.slug}`);
-                            console.log(`      Rs ${oldPrice.toLocaleString()} → Rs ${check.priceValue.toLocaleString()} (${pct}%)`);
+                            console.log(`      Rs ${oldCompare.toLocaleString()}${label} → Rs ${newCompare.toLocaleString()}${label} (${pct}%)`);
 
                             await db.query(
-                                'UPDATE listings SET price_value = $1, price_type = $2, price = $3 WHERE id = $4',
-                                [check.priceValue, check.priceType, check.priceText, listing.id]
+                                `UPDATE listings SET price_value = $1, price_type = $2, price = $3,
+                                 price_per_perch = $4, total_price = $5 WHERE id = $6`,
+                                [check.priceValue, check.priceType, check.priceText, newPPP, newTP, listing.id]
                             );
                         }
                     }

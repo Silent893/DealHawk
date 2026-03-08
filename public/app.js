@@ -93,6 +93,7 @@ function renderListingCard(l) {
 
   // Price comparison badges
   let priceCompHtml = '';
+  const cardPrice = window._isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
   if (l.prev_price && parseFloat(l.prev_price) !== parseFloat(l.price_value)) {
     const prev = parseFloat(l.prev_price), curr = parseFloat(l.price_value);
     const diff = curr - prev, pct = prev ? ((diff / prev) * 100).toFixed(1) : 0;
@@ -100,9 +101,9 @@ function renderListingCard(l) {
       ? `<span class="price-drop-badge drop">🔻 ${pct}%</span>`
       : `<span class="price-drop-badge rise">🔺 +${pct}%</span>`;
   }
-  if (l.job_avg_price && l.price_value) {
-    const avg = parseFloat(l.job_avg_price), price = parseFloat(l.price_value);
-    const diff = ((price - avg) / avg * 100).toFixed(0);
+  if (l.job_avg_price && cardPrice) {
+    const avg = parseFloat(l.job_avg_price);
+    const diff = ((cardPrice - avg) / avg * 100).toFixed(0);
     if (Math.abs(diff) < 3) priceCompHtml += '<span class="price-drop-badge" style="background:rgba(100,100,100,0.15);color:var(--text-muted)">≈ avg</span>';
     else priceCompHtml += diff < 0
       ? `<span class="price-drop-badge drop">${diff}% avg</span>`
@@ -127,8 +128,18 @@ function renderListingCard(l) {
   }
 
   // Urgency score
-  const urgencyScore = computeUrgencyScore(l, parseFloat(l.job_avg_price) || 0);
+  const urgencyAvg = window._isLandMode ? parseFloat(l.job_avg_price) || 0 : parseFloat(l.job_avg_price) || 0;
+  const urgencyScore = computeUrgencyScore(l, urgencyAvg);
   const urgencyBadge = getUrgencyBadge(urgencyScore, l);
+
+  // Price display — land mode shows per-perch prominent + total small
+  let priceDisplay = esc(l.price || '');
+  if (window._isLandMode && l.price_per_perch) {
+    priceDisplay = `Rs ${Number(l.price_per_perch).toLocaleString()} /perch`;
+    if (l.total_price) {
+      priceDisplay += `<span style="font-size:0.72rem;color:var(--text-muted);margin-left:6px">Total: Rs ${Number(l.total_price).toLocaleString()}${l.size_perches ? ' (' + l.size_perches + 'p)' : ''}</span>`;
+    }
+  }
 
   return `
     <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
@@ -138,7 +149,7 @@ function renderListingCard(l) {
           <a href="${l.url}" target="_blank" style="color:inherit;text-decoration:none">${esc(l.title || l.slug)}</a>
         </div>
         <div class="listing-card-price">
-          ${esc(l.price || '')} ${priceCompHtml} ${velocityBadge} ${urgencyBadge}
+          ${priceDisplay} ${priceCompHtml} ${velocityBadge} ${urgencyBadge}
         </div>
         ${l.sub_location ? `<div style="font-size:0.75rem;color:var(--text-muted)">📍 ${esc(l.sub_location)}${l.location ? ', ' + esc(l.location) : ''}</div>` : ''}
         ${ageText ? `<div style="font-size:0.72rem;color:var(--text-muted)">🕐 Posted ${ageText}</div>` : ''}
@@ -549,6 +560,13 @@ function renderSaveStep(body) {
       <input class="form-input" id="wiz-max-pages" type="number" min="1" max="10" value="${wizardData.max_pages || 2}" style="max-width:120px">
       <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Scans deeper when new listings are found, stops when all are already known. Job auto-runs after creation.</div>
     </div>
+    <div class="form-group">
+      <label class="checkbox-label" style="cursor:pointer">
+        <input type="checkbox" id="wiz-land-mode" ${wizardData.is_land_mode ? 'checked' : ''}>
+        🏠 Land Mode (price per perch)
+      </label>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">All stats and charts will use price/perch instead of total price.</div>
+    </div>
     ` : ''}
     <div style="margin-top:16px;padding:14px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--text-secondary)">
       <strong>Summary:</strong><br>
@@ -679,6 +697,7 @@ async function wizardNext() {
       } else {
         // Create new job
         const maxPages = parseInt(document.getElementById('wiz-max-pages')?.value) || 2;
+        const isLandMode = document.getElementById('wiz-land-mode')?.checked || false;
         await api('POST', '/jobs', {
           name,
           url: wizardData.url,
@@ -689,6 +708,7 @@ async function wizardNext() {
           log_rules: wizardData.log_rules,
           frequency_hours: frequency,
           max_pages: maxPages,
+          is_land_mode: isLandMode,
         });
       }
 
@@ -854,6 +874,7 @@ async function loadJobDetail(id) {
 
     // Save original analytics for restore after group selection
     window._originalJobAnalytics = analytics;
+    window._isLandMode = analytics.isLandMode || false;
     activeGroupKey = null;
 
     renderJobStats(analytics);
@@ -897,6 +918,10 @@ function renderJobStats(a, groupLabel) {
     : '—';
   const demandIcons = { hot: '🔥 Hot', warm: '🌡️ Warm', cool: '❄️ Cool', unknown: '❓' };
   const totalMarket = a.price.avg && a.price.matchedCount ? formatPrice(a.price.avg * a.price.matchedCount) : '—';
+  const perch = window._isLandMode ? '/perch' : '';
+  const avgLabel = window._isLandMode ? 'Avg Price/Perch' : 'Avg Price';
+  const rangeLabel = window._isLandMode ? 'Price Range/Perch' : 'Price Range';
+  const medianLabel = window._isLandMode ? 'Median/Perch' : 'Median';
 
   const header = groupLabel
     ? `<div style="width:100%;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
@@ -908,13 +933,13 @@ function renderJobStats(a, groupLabel) {
   document.getElementById('job-stats-bar').innerHTML = header + `
     <div class="stat-card">
       <div class="stat-card-value">${formatPrice(a.price.avg)}</div>
-      <div class="stat-card-label">Avg Price</div>
+      <div class="stat-card-label">${avgLabel}</div>
       <div style="font-size:0.75rem;color:var(--text-muted)">${trendArrow} (7d)</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-value">${formatPrice(a.price.min)} – ${formatPrice(a.price.max)}</div>
-      <div class="stat-card-label">Price Range</div>
-      <div style="font-size:0.75rem;color:var(--text-muted)">Median: ${formatPrice(a.price.median)}</div>
+      <div class="stat-card-label">${rangeLabel}</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${medianLabel}: ${formatPrice(a.price.median)}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-value">${demandIcons[a.timeToSell?.demandLevel || 'unknown']}</div>
@@ -945,8 +970,9 @@ function renderJobStats(a, groupLabel) {
 
 // Compute same analytics structure from raw listing data (for group-level stats)
 function computeStatsFromListings(listings) {
-  const prices = listings.filter(l => l.price_value).map(l => parseFloat(l.price_value)).sort((a, b) => a - b);
-  const activePrices = listings.filter(l => l.status === 'active' && l.price_value).map(l => parseFloat(l.price_value)).sort((a, b) => a - b);
+  const priceOf = l => window._isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+  const prices = listings.filter(l => priceOf(l)).map(priceOf).sort((a, b) => a - b);
+  const activePrices = listings.filter(l => l.status === 'active' && priceOf(l)).map(priceOf).sort((a, b) => a - b);
   const active = listings.filter(l => l.status === 'active');
   const sold = listings.filter(l => l.status === 'sold');
   const avg = activePrices.length ? Math.round(activePrices.reduce((s, v) => s + v, 0) / activePrices.length) : 0;
@@ -1052,8 +1078,9 @@ function renderPriceDistribution(listings) {
   const ctx = document.getElementById('price-dist-chart');
   if (priceDistChart) { priceDistChart.destroy(); priceDistChart = null; }
 
+  const priceGetter = l => window._isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
   const prices = listings.filter(l => l.price_value && l.status === 'active')
-    .map(l => parseFloat(l.price_value)).sort((a, b) => a - b);
+    .map(priceGetter).filter(p => p > 0).sort((a, b) => a - b);
   if (prices.length < 3) { return; }
 
   // Create 10 buckets

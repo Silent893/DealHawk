@@ -120,6 +120,34 @@ const MIGRATIONS = [
       END $$;
     `,
   },
+  {
+    name: 'add_land_mode',
+    sql: `
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='jobs' AND column_name='is_land_mode') THEN
+          ALTER TABLE jobs ADD COLUMN is_land_mode BOOLEAN DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='price_per_perch') THEN
+          ALTER TABLE listings ADD COLUMN price_per_perch NUMERIC;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='total_price') THEN
+          ALTER TABLE listings ADD COLUMN total_price NUMERIC;
+        END IF;
+      END $$;
+
+      -- Backfill existing listings
+      UPDATE listings SET
+        price_per_perch = CASE
+          WHEN price_type = 'per_perch' THEN price_value
+          WHEN price_type = 'total' AND size_perches > 0 THEN ROUND(price_value / size_perches)
+          ELSE NULL END,
+        total_price = CASE
+          WHEN price_type = 'total' THEN price_value
+          WHEN price_type = 'per_perch' AND size_perches > 0 THEN ROUND(price_value * size_perches)
+          ELSE price_value END
+      WHERE price_value IS NOT NULL AND price_per_perch IS NULL;
+    `,
+  },
 ];
 
 async function migrate() {
