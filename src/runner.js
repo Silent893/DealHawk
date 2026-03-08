@@ -113,7 +113,7 @@ async function runJob(job) {
            size_text, size_perches, location, url, is_member, posted_text, status, last_seen_at,
            price_per_perch, total_price)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', NOW(), $13, $14)
-         ON CONFLICT (slug) DO UPDATE SET
+         ON CONFLICT (job_id, slug) DO UPDATE SET
            last_seen_at = NOW(),
            status = CASE WHEN listings.status = 'excluded' THEN 'excluded' ELSE listings.status END
          RETURNING id, (xmax = 0) AS is_new`,

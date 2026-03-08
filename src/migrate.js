@@ -159,6 +159,21 @@ const MIGRATIONS = [
       END $$;
     `,
   },
+  {
+    name: 'slug_unique_per_job',
+    sql: `
+      DO $$ BEGIN
+        -- Drop old global unique constraint on slug
+        IF EXISTS (SELECT 1 FROM pg_indexes WHERE tablename='listings' AND indexname='listings_slug_key') THEN
+          ALTER TABLE listings DROP CONSTRAINT listings_slug_key;
+        END IF;
+        -- Create new composite unique index on (job_id, slug)
+        IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename='listings' AND indexname='listings_job_id_slug_key') THEN
+          CREATE UNIQUE INDEX listings_job_id_slug_key ON listings (job_id, slug);
+        END IF;
+      END $$;
+    `,
+  },
 ];
 
 async function migrate() {
