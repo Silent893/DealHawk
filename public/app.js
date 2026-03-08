@@ -126,6 +126,10 @@ function renderListingCard(l) {
     else ageText = `${Math.floor(days / 30)}mo ago`;
   }
 
+  // Urgency score
+  const urgencyScore = computeUrgencyScore(l, parseFloat(l.job_avg_price) || 0);
+  const urgencyBadge = getUrgencyBadge(urgencyScore);
+
   return `
     <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
       ${imgSrc ? `<img class="listing-card-img" src="${imgSrc}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
@@ -134,7 +138,7 @@ function renderListingCard(l) {
           <a href="${l.url}" target="_blank" style="color:inherit;text-decoration:none">${esc(l.title || l.slug)}</a>
         </div>
         <div class="listing-card-price">
-          ${esc(l.price || '')} ${priceCompHtml} ${velocityBadge}
+          ${esc(l.price || '')} ${priceCompHtml} ${velocityBadge} ${urgencyBadge}
         </div>
         ${l.sub_location ? `<div style="font-size:0.75rem;color:var(--text-muted)">📍 ${esc(l.sub_location)}${l.location ? ', ' + esc(l.location) : ''}</div>` : ''}
         ${ageText ? `<div style="font-size:0.72rem;color:var(--text-muted)">🕐 Posted ${ageText}</div>` : ''}
@@ -870,6 +874,11 @@ async function loadJobDetail(id) {
     loadSavedCustomRules();
     jobListingPage = 0;
     loadJobListingsFiltered();
+
+    // Load distribution charts from all listings
+    const allListings = await api('GET', `/listings?job_id=${id}&matched_only=true&limit=500`);
+    const chartListings = allListings.listings || allListings;
+    renderDistributionCharts(chartListings, id);
   } catch (err) {
     console.error('Failed to load job detail:', err);
   }
@@ -1026,6 +1035,172 @@ function renderPriceChart(history) {
       },
     },
   });
+}
+
+/* ─── Distribution Charts ─────────────────────────────────── */
+let priceDistChart = null;
+let supplyTrendChart = null;
+let daysOnMarketChart = null;
+
+async function renderDistributionCharts(listings, jobId) {
+  renderPriceDistribution(listings);
+  renderDaysOnMarket(listings);
+  await renderSupplyTrend(jobId);
+}
+
+function renderPriceDistribution(listings) {
+  const ctx = document.getElementById('price-dist-chart');
+  if (priceDistChart) { priceDistChart.destroy(); priceDistChart = null; }
+
+  const prices = listings.filter(l => l.price_value && l.status === 'active')
+    .map(l => parseFloat(l.price_value)).sort((a, b) => a - b);
+  if (prices.length < 3) { return; }
+
+  // Create 10 buckets
+  const min = prices[0];
+  const max = prices[prices.length - 1];
+  const bucketSize = Math.ceil((max - min) / 10) || 1;
+  const buckets = Array(10).fill(0);
+  const labels = [];
+
+  for (let i = 0; i < 10; i++) {
+    const lo = min + i * bucketSize;
+    const hi = lo + bucketSize;
+    labels.push(formatPrice(lo));
+    prices.forEach(p => { if (p >= lo && (i === 9 ? p <= hi : p < hi)) buckets[i]++; });
+  }
+
+  priceDistChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Listings',
+        data: buckets,
+        backgroundColor: buckets.map((_, i) =>
+          i < 3 ? 'rgba(34, 197, 94, 0.6)' : i < 7 ? 'rgba(99, 102, 241, 0.6)' : 'rgba(239, 68, 68, 0.6)'
+        ),
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#94a3b8', maxRotation: 45 }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+async function renderSupplyTrend(jobId) {
+  const ctx = document.getElementById('supply-trend-chart');
+  if (supplyTrendChart) { supplyTrendChart.destroy(); supplyTrendChart = null; }
+
+  try {
+    const data = await api('GET', `/jobs/${jobId}/supply-trend`);
+    if (!data || data.length === 0) return;
+
+    const labels = data.map(d => new Date(d.week).toLocaleDateString('en', { month: 'short', day: 'numeric' }));
+
+    supplyTrendChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'New',
+            data: data.map(d => parseInt(d.new_count)),
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34, 197, 94, 0.15)',
+            fill: true, tension: 0.3,
+          },
+          {
+            label: 'Sold',
+            data: data.map(d => parseInt(d.sold_count)),
+            borderColor: '#ef4444',
+            backgroundColor: 'rgba(239, 68, 68, 0.15)',
+            fill: true, tension: 0.3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } },
+        scales: {
+          y: { ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+        },
+      },
+    });
+  } catch (err) {
+    console.error('Supply trend error:', err);
+  }
+}
+
+function renderDaysOnMarket(listings) {
+  const ctx = document.getElementById('days-on-market-chart');
+  if (daysOnMarketChart) { daysOnMarketChart.destroy(); daysOnMarketChart = null; }
+
+  const now = Date.now();
+  const buckets = { '0-3 days': 0, '4-7 days': 0, '1-2 weeks': 0, '2-4 weeks': 0, '1+ months': 0 };
+
+  listings.filter(l => l.posted_at).forEach(l => {
+    const days = Math.floor((now - new Date(l.posted_at).getTime()) / 86400000);
+    if (days <= 3) buckets['0-3 days']++;
+    else if (days <= 7) buckets['4-7 days']++;
+    else if (days <= 14) buckets['1-2 weeks']++;
+    else if (days <= 28) buckets['2-4 weeks']++;
+    else buckets['1+ months']++;
+  });
+
+  daysOnMarketChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: Object.keys(buckets),
+      datasets: [{
+        label: 'Listings',
+        data: Object.values(buckets),
+        backgroundColor: ['#22c55e', '#6366f1', '#818cf8', '#f59e0b', '#ef4444'],
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+/* ─── Seller Urgency Score ────────────────────────────────── */
+function computeUrgencyScore(listing, avgPrice) {
+  let score = 0;
+  // Price drops weigh heavily
+  const changes = parseInt(listing.price_changes) || 0;
+  score += changes * 3;
+  // Days listed
+  if (listing.posted_at) {
+    const days = Math.floor((Date.now() - new Date(listing.posted_at).getTime()) / 86400000);
+    score += Math.min(days / 7, 4); // cap at ~4
+  }
+  // Below average
+  if (avgPrice && listing.price_value) {
+    const pct = ((avgPrice - parseFloat(listing.price_value)) / avgPrice) * 100;
+    if (pct > 0) score += pct / 10;
+  }
+  return Math.round(score * 10) / 10;
+}
+
+function getUrgencyBadge(score) {
+  if (score >= 8) return '<span style="background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">🔥 Very Urgent</span>';
+  if (score >= 5) return '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">⚡ Urgent</span>';
+  if (score >= 3) return '<span style="background:rgba(99,102,241,0.15);color:#818cf8;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">📊 Moderate</span>';
+  return '';
 }
 
 async function loadJobGroups() {

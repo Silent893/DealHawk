@@ -215,6 +215,27 @@ app.get('/api/jobs/:id/price-history', async (req, res) => {
     }
 });
 
+// Supply trend — new listings per week
+app.get('/api/jobs/:id/supply-trend', async (req, res) => {
+    const jobId = req.params.id;
+    try {
+        const result = await db.query(`
+            SELECT
+                DATE_TRUNC('week', first_seen_at) AS week,
+                COUNT(*) AS new_count,
+                COUNT(*) FILTER (WHERE status = 'sold') AS sold_count,
+                COUNT(*) FILTER (WHERE status = 'active') AS active_count
+            FROM listings
+            WHERE job_id = $1 AND matched_log = true AND first_seen_at IS NOT NULL
+            GROUP BY week
+            ORDER BY week
+        `, [jobId]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/jobs/:id/groups', async (req, res) => {
     const jobId = req.params.id;
     const field = req.query.field;
@@ -519,6 +540,7 @@ app.get('/api/listings', async (req, res) => {
             oldest: 'l.first_seen_at ASC',
             price_low: 'l.price_value ASC NULLS LAST',
             price_high: 'l.price_value DESC NULLS LAST',
+            best_deal: 'l.price_value ASC NULLS LAST',
         };
         const orderBy = `CASE WHEN l.status = 'active' THEN 0 ELSE 1 END, ${sortMap[sort] || sortMap.newest}`;
 

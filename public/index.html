@@ -84,6 +84,23 @@
             <canvas id="price-history-chart" height="200"></canvas>
           </div>
         </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:20px">
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">📊 Price Distribution</h4>
+            <canvas id="price-dist-chart" height="160"></canvas>
+          </div>
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">📈 Supply Trend (Weekly)</h4>
+            <canvas id="supply-trend-chart" height="160"></canvas>
+          </div>
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">⏱ Days on Market</h4>
+            <canvas id="days-on-market-chart" height="160"></canvas>
+          </div>
+        </div>
 
         <!-- Grouping Section -->
         <div
@@ -126,6 +143,7 @@
             <option value="oldest">Oldest first</option>
             <option value="price_low">Price: Low → High</option>
             <option value="price_high">Price: High → Low</option>
+            <option value="best_deal">🔥 Best Deals</option>
           </select>
           <label class="checkbox-label">
             <input type="checkbox" id="job-listing-matched" checked> Matched only
