@@ -1293,7 +1293,11 @@ async function filterListingsByIds(ids, groupLabel) {
   const groupAnalytics = computeStatsFromListings(groupListings);
   renderJobStats(groupAnalytics, groupLabel);
 
-  // Show active listings in the grid
+  // Update distribution charts for this group
+  renderPriceDistribution(groupListings);
+  renderDaysOnMarket(groupListings);
+
+  // Show listings in the grid
   renderJobListings(groupListings);
   document.getElementById('job-listings-pagination').innerHTML =
     `<span style="color:var(--text-muted);font-size:0.85rem">${groupListings.length} listings in group "${esc(groupLabel)}"</span>`;
@@ -1304,6 +1308,15 @@ function clearGroupSelection() {
   renderJobGroups(currentGroups);
   if (window._originalJobAnalytics) renderJobStats(window._originalJobAnalytics);
   loadJobListingsFiltered();
+
+  // Restore charts from all listings
+  if (currentJobId) {
+    api('GET', `/listings?job_id=${currentJobId}&matched_only=true&limit=500`).then(data => {
+      const listings = data.listings || data;
+      renderPriceDistribution(listings);
+      renderDaysOnMarket(listings);
+    });
+  }
 }
 
 /* ─── Custom Group Rules ──────────────────────────────────── */
