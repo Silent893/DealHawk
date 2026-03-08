@@ -128,7 +128,7 @@ function renderListingCard(l) {
 
   // Urgency score
   const urgencyScore = computeUrgencyScore(l, parseFloat(l.job_avg_price) || 0);
-  const urgencyBadge = getUrgencyBadge(urgencyScore);
+  const urgencyBadge = getUrgencyBadge(urgencyScore, l);
 
   return `
     <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
@@ -1196,10 +1196,11 @@ function computeUrgencyScore(listing, avgPrice) {
   return Math.round(score * 10) / 10;
 }
 
-function getUrgencyBadge(score) {
-  if (score >= 8) return '<span style="background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">🔥 Very Urgent</span>';
-  if (score >= 5) return '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">⚡ Urgent</span>';
-  if (score >= 3) return '<span style="background:rgba(99,102,241,0.15);color:#818cf8;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">📊 Moderate</span>';
+function getUrgencyBadge(score, listing) {
+  const drops = parseInt(listing?.price_changes) || 0;
+  if (score >= 8 && drops >= 2) return '<span style="background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">🔥 Very Urgent</span>';
+  if (score >= 5 && drops >= 1) return '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">⚡ Urgent</span>';
+  if (score >= 3 && drops >= 1) return '<span style="background:rgba(99,102,241,0.15);color:#818cf8;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">📊 Motivated</span>';
   return '';
 }
 
