@@ -182,6 +182,19 @@ app.patch('/api/listings/:id/exclude', async (req, res) => {
     }
 });
 
+app.patch('/api/listings/:id/match', async (req, res) => {
+    try {
+        const result = await db.query(
+            `UPDATE listings SET matched_log = NOT COALESCE(matched_log, false) WHERE id = $1 RETURNING id, matched_log`,
+            [req.params.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Listing not found' });
+        res.json({ matched: result.rows[0].matched_log });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/listings', async (req, res) => {
     const { job_id, matched_only, status, search, sort, limit = 50, offset = 0 } = req.query;
     try {

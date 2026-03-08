@@ -116,11 +116,11 @@ async function runJob(job) {
             }
         }
 
-        // ── Phase 2: Re-check active listings ───────────────────
+        // ── Phase 2: Re-check matched active listings ──────────────
         const activeListings = await db.query(
             `SELECT id, slug, title, url, price_value, price_type, price
        FROM listings
-       WHERE job_id = $1 AND status = 'active'
+       WHERE job_id = $1 AND status = 'active' AND matched_log = true
        ORDER BY id`,
             [job.id]
         );

@@ -152,6 +152,11 @@ async function excludeListing(id) {
   loadListings();
 }
 
+async function toggleMatch(id) {
+  await api('PATCH', `/listings/${id}/match`);
+  loadListings();
+}
+
 /* ─── Listings View ────────────────────────────────────────── */
 async function loadListings() {
   const jobFilter = document.getElementById('listing-job-filter').value;
@@ -239,6 +244,7 @@ async function loadListings() {
           <span class="${statusClass}">${statusLabel}</span>
           <span>${l.job_name || ''} · ${new Date(l.first_seen_at).toLocaleDateString()}</span>
           <button class="btn btn-sm btn-ghost" onclick="showPriceChart(${l.id}, '${esc(l.title || l.slug)}')" title="Price history">📈</button>
+          <button class="btn btn-sm btn-ghost" onclick="toggleMatch(${l.id})" title="${l.matched_log ? 'Unmatch' : 'Mark as matched'}">${l.matched_log ? '⭐' : '☆'}</button>
           ${l.status !== 'excluded' ? `<button class="btn btn-sm btn-ghost" onclick="excludeListing(${l.id})" title="Exclude listing">⛔</button>` : ''}
         </div>
       </div>
