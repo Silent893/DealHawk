@@ -202,7 +202,7 @@ app.get('/api/listings', async (req, res) => {
             price_low: 'l.price_value ASC NULLS LAST',
             price_high: 'l.price_value DESC NULLS LAST',
         };
-        const orderBy = sortMap[sort] || sortMap.newest;
+        const orderBy = `CASE WHEN l.status = 'active' THEN 0 ELSE 1 END, ${sortMap[sort] || sortMap.newest}`;
 
         const result = await db.query(
             `SELECT l.*, j.name as job_name,
