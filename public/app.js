@@ -93,7 +93,8 @@ function renderListingCard(l) {
 
   // Price comparison badges
   let priceCompHtml = '';
-  const cardPrice = window._isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+  const showPerPerch = window._isLandMode && !window._priceViewTotal;
+  const cardPrice = showPerPerch ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
   if (l.prev_price && parseFloat(l.prev_price) !== parseFloat(l.price_value)) {
     const prev = parseFloat(l.prev_price), curr = parseFloat(l.price_value);
     const diff = curr - prev, pct = prev ? ((diff / prev) * 100).toFixed(1) : 0;
@@ -132,12 +133,19 @@ function renderListingCard(l) {
   const urgencyScore = computeUrgencyScore(l, urgencyAvg);
   const urgencyBadge = getUrgencyBadge(urgencyScore, l);
 
-  // Price display — land mode shows per-perch prominent + total small
+  // Price display — land mode shows per-perch prominent + total small (or vice versa when toggled)
   let priceDisplay = esc(l.price || '');
   if (window._isLandMode && l.price_per_perch) {
-    priceDisplay = `Rs ${Number(l.price_per_perch).toLocaleString()} /perch`;
-    if (l.total_price) {
-      priceDisplay += `<span style="font-size:0.72rem;color:var(--text-muted);margin-left:6px">Total: Rs ${Number(l.total_price).toLocaleString()}${l.size_perches ? ' (' + l.size_perches + 'p)' : ''}</span>`;
+    if (!window._priceViewTotal) {
+      priceDisplay = `Rs ${Number(l.price_per_perch).toLocaleString()} /perch`;
+      if (l.total_price) {
+        priceDisplay += `<span style="font-size:0.72rem;color:var(--text-muted);margin-left:6px">Total: Rs ${Number(l.total_price).toLocaleString()}${l.size_perches ? ' (' + l.size_perches + 'p)' : ''}</span>`;
+      }
+    } else {
+      priceDisplay = l.total_price ? `Rs ${Number(l.total_price).toLocaleString()}` : esc(l.price || '');
+      if (l.price_per_perch) {
+        priceDisplay += `<span style="font-size:0.72rem;color:var(--text-muted);margin-left:6px">(Rs ${Number(l.price_per_perch).toLocaleString()}/perch${l.size_perches ? ', ' + l.size_perches + 'p' : ''})</span>`;
+      }
     }
   }
 
@@ -918,17 +926,23 @@ function renderJobStats(a, groupLabel) {
     : '—';
   const demandIcons = { hot: '🔥 Hot', warm: '🌡️ Warm', cool: '❄️ Cool', unknown: '❓' };
   const totalMarket = a.price.avg && a.price.matchedCount ? formatPrice(a.price.avg * a.price.matchedCount) : '—';
-  const perch = window._isLandMode ? '/perch' : '';
-  const avgLabel = window._isLandMode ? 'Avg Price/Perch' : 'Avg Price';
-  const rangeLabel = window._isLandMode ? 'Price Range/Perch' : 'Price Range';
-  const medianLabel = window._isLandMode ? 'Median/Perch' : 'Median';
+  const showPerPerch = window._isLandMode && !window._priceViewTotal;
+  const avgLabel = showPerPerch ? 'Avg Price/Perch' : 'Avg Price';
+  const rangeLabel = showPerPerch ? 'Price Range/Perch' : 'Price Range';
+  const medianLabel = showPerPerch ? 'Median/Perch' : 'Median';
+
+  const toggleBtn = window._isLandMode
+    ? `<button class="btn btn-sm btn-ghost" onclick="togglePriceView()" style="font-size:0.75rem;margin-left:8px">
+        ${showPerPerch ? '🏠 /Perch' : '💰 Total'} ↔
+       </button>`
+    : '';
 
   const header = groupLabel
     ? `<div style="width:100%;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:0.85rem;color:var(--accent);font-weight:600">📊 ${esc(groupLabel)} Group Stats</span>
-        <button class="btn btn-sm btn-ghost" onclick="clearGroupSelection()" style="font-size:0.75rem">Show All ✕</button>
+        <span><button class="btn btn-sm btn-ghost" onclick="clearGroupSelection()" style="font-size:0.75rem">Show All ✕</button>${toggleBtn}</span>
        </div>`
-    : '';
+    : (window._isLandMode ? `<div style="width:100%;margin-bottom:4px;text-align:right">${toggleBtn}</div>` : '');
 
   document.getElementById('job-stats-bar').innerHTML = header + `
     <div class="stat-card">
@@ -970,7 +984,8 @@ function renderJobStats(a, groupLabel) {
 
 // Compute same analytics structure from raw listing data (for group-level stats)
 function computeStatsFromListings(listings) {
-  const priceOf = l => window._isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+  const showPP = window._isLandMode && !window._priceViewTotal;
+  const priceOf = l => showPP ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
   const prices = listings.filter(l => priceOf(l)).map(priceOf).sort((a, b) => a - b);
   const activePrices = listings.filter(l => l.status === 'active' && priceOf(l)).map(priceOf).sort((a, b) => a - b);
   const active = listings.filter(l => l.status === 'active');
@@ -1078,7 +1093,8 @@ function renderPriceDistribution(listings) {
   const ctx = document.getElementById('price-dist-chart');
   if (priceDistChart) { priceDistChart.destroy(); priceDistChart = null; }
 
-  const priceGetter = l => window._isLandMode ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+  const showPP = window._isLandMode && !window._priceViewTotal;
+  const priceGetter = l => showPP ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
   const prices = listings.filter(l => l.price_value && l.status === 'active')
     .map(priceGetter).filter(p => p > 0).sort((a, b) => a - b);
   if (prices.length < 3) { return; }
@@ -1343,6 +1359,21 @@ function clearGroupSelection() {
       const listings = data.listings || data;
       renderPriceDistribution(listings);
       renderDaysOnMarket(listings);
+    });
+  }
+}
+
+function togglePriceView() {
+  window._priceViewTotal = !window._priceViewTotal;
+  // Re-render stats
+  if (window._originalJobAnalytics) renderJobStats(window._originalJobAnalytics);
+  // Re-render listings
+  loadJobListingsFiltered();
+  // Re-render charts
+  if (currentJobId) {
+    api('GET', `/listings?job_id=${currentJobId}&matched_only=true&limit=500`).then(data => {
+      const listings = data.listings || data;
+      renderPriceDistribution(listings);
     });
   }
 }
