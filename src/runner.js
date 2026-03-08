@@ -6,6 +6,29 @@ const { scrapeDetail, matchesRules, checkListing } = require('./detail-scraper')
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
+ * Parse ikman posted date text like "08 Mar 7:42 am" into a Date.
+ */
+function parsePostedDate(text) {
+    if (!text) return null;
+    try {
+        const months = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+        // Format: "08 Mar 7:42 am" or "08 Mar 2025 7:42 am"
+        const match = text.match(/(\d{1,2})\s+(\w{3})(?:\s+(\d{4}))?\s+(\d{1,2}):(\d{2})\s*(am|pm)/i);
+        if (!match) return null;
+        const [, day, mon, year, hour, min, ampm] = match;
+        const d = new Date();
+        d.setFullYear(year ? parseInt(year) : d.getFullYear());
+        d.setMonth(months[mon] ?? 0);
+        d.setDate(parseInt(day));
+        let h = parseInt(hour);
+        if (ampm.toLowerCase() === 'pm' && h !== 12) h += 12;
+        if (ampm.toLowerCase() === 'am' && h === 12) h = 0;
+        d.setHours(h, parseInt(min), 0, 0);
+        return d;
+    } catch { return null; }
+}
+
+/**
  * Run a single job:
  *   Phase 1 — Scrape list page(s) for NEW listings
  *   Phase 2 — Re-check all active listings (price tracking + sold detection)
@@ -101,16 +124,21 @@ async function runJob(job) {
                         const fullListing = { ...listing, detailFields: detail.detailFields };
                         const matchedLog = matchesRules(fullListing, job.log_rules);
 
+                        const postedAt = parsePostedDate(detail.postedText);
+
                         await db.query(
                             `UPDATE listings SET
                  detail_scraped = true, description = $1, phone = $2,
                  seller_name = $3, detail_fields = $4, image_urls = $5,
-                 image_path = $6, matched_log = $7
+                 image_path = $6, matched_log = $7,
+                 posted_at = COALESCE($9, posted_at),
+                 sub_location = COALESCE($10, sub_location)
                WHERE id = $8`,
                             [
                                 detail.description, detail.phone, detail.sellerName,
                                 JSON.stringify(detail.detailFields), JSON.stringify(detail.imageUrls),
                                 detail.imagePath, matchedLog, row.id,
+                                postedAt, detail.subLocation || null,
                             ]
                         );
                         deepDived++;
@@ -145,7 +173,7 @@ async function runJob(job) {
                     rechecked++;
 
                     if (!check.alive) {
-                        await db.query("UPDATE listings SET status = 'sold' WHERE id = $1", [listing.id]);
+                        await db.query("UPDATE listings SET status = 'sold', sold_at = COALESCE(sold_at, NOW()) WHERE id = $1", [listing.id]);
                         soldDetected++;
                         console.log(`    🔴 SOLD: ${listing.title || listing.slug}`);
                         continue;

@@ -73,6 +73,21 @@ async function scrapeDetail(url, slug, browser) {
             });
             data.imageUrls = imageUrls;
 
+            // Extract posted date (e.g., "Posted on 23 Jan 9:51 pm")
+            const headerEl = document.querySelector('[class*="header--"]') ||
+                document.querySelector('[class*="title-container--"]');
+            const headerText = headerEl ? headerEl.textContent : '';
+            const postedMatch = headerText.match(/Posted on\s+(\d{1,2}\s+\w{3}(?:\s+\d{4})?\s+\d{1,2}:\d{2}\s*(?:am|pm))/i);
+            data.postedText = postedMatch ? postedMatch[1].trim() : '';
+
+            // Extract sub-location from detail page links
+            const subLocEl = document.querySelector('[data-testid="subtitle-sublocation-link"] span') ||
+                document.querySelector('[class*="subtitle-location-link--"]:first-of-type span');
+            const parentLocEl = document.querySelector('[data-testid="subtitle-parentlocation-link"] span') ||
+                document.querySelector('[class*="subtitle-location-link--"]:last-of-type span');
+            data.subLocation = subLocEl ? subLocEl.textContent.trim().replace(/,\s*$/, '') : '';
+            data.parentLocation = parentLocEl ? parentLocEl.textContent.trim() : '';
+
             return data;
         });
 

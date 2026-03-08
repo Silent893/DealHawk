@@ -104,6 +104,22 @@ const MIGRATIONS = [
       END $$;
     `,
   },
+  {
+    name: 'add_analytics_columns',
+    sql: `
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='posted_at') THEN
+          ALTER TABLE listings ADD COLUMN posted_at TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='sold_at') THEN
+          ALTER TABLE listings ADD COLUMN sold_at TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='sub_location') THEN
+          ALTER TABLE listings ADD COLUMN sub_location TEXT;
+        END IF;
+      END $$;
+    `,
+  },
 ];
 
 async function migrate() {
