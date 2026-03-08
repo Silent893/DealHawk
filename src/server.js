@@ -279,7 +279,17 @@ app.get('/api/jobs', async (req, res) => {
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id) AS listing_count,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND matched_log = true) AS matched_count,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'active') AS active_count,
-        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold') AS sold_count
+        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold') AS sold_count,
+        (SELECT ROUND(AVG(price_value)) FROM listings WHERE job_id = j.id AND matched_log = true AND status = 'active' AND price_value IS NOT NULL) AS avg_price,
+        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND first_seen_at > NOW() - INTERVAL '7 days') AS new_7d,
+        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold' AND sold_at > NOW() - INTERVAL '7 days') AS sold_7d,
+        (SELECT COUNT(*) FROM (
+          SELECT ph.listing_id FROM price_history ph
+          JOIN listings l ON l.id = ph.listing_id
+          WHERE l.job_id = j.id AND l.matched_log = true AND l.status = 'active'
+          GROUP BY ph.listing_id HAVING COUNT(*) > 1
+          AND (array_agg(ph.price_value ORDER BY ph.recorded_at DESC))[1] < (array_agg(ph.price_value ORDER BY ph.recorded_at ASC))[1]
+        ) sub) AS price_drops
       FROM jobs j ORDER BY j.id DESC
     `);
         res.json(result.rows);

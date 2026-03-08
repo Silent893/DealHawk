@@ -91,9 +91,15 @@ async function loadJobs() {
   }
   empty.style.display = 'none';
 
-  grid.innerHTML = jobs.map(j => `
-    <div class="job-card" style="cursor:pointer" onclick="openJobDetail(${j.id}, '${esc(j.name)}')"
-      >
+  grid.innerHTML = jobs.map(j => {
+    const avgP = j.avg_price ? formatPrice(parseFloat(j.avg_price)) : '—';
+    const badges = [];
+    if (parseInt(j.new_7d) > 0) badges.push(`<span style="color:#22c55e;font-size:0.75rem">🆕 ${j.new_7d} new</span>`);
+    if (parseInt(j.price_drops) > 0) badges.push(`<span style="color:#f59e0b;font-size:0.75rem">💰 ${j.price_drops} drops</span>`);
+    if (parseInt(j.sold_7d) > 0) badges.push(`<span style="color:#ef4444;font-size:0.75rem">🔴 ${j.sold_7d} sold</span>`);
+
+    return `
+    <div class="job-card" style="cursor:pointer" onclick="openJobDetail(${j.id}, '${esc(j.name)}')">
       <div class="job-card-header">
         <span class="job-card-title">${esc(j.name)}</span>
         <span class="job-card-badge ${j.active ? 'badge-active' : 'badge-paused'}">
@@ -101,18 +107,19 @@ async function loadJobs() {
         </span>
       </div>
       <div class="job-card-url" style="font-size:0.72rem;max-height:36px;overflow:hidden">${esc(j.url.split('\n')[0])}${j.url.includes('\n') ? ' (+' + (j.url.split('\n').length - 1) + ' more)' : ''}</div>
+      ${badges.length > 0 ? `<div style="display:flex;gap:10px;margin:6px 0;flex-wrap:wrap">${badges.join('')}</div>` : ''}
       <div class="job-card-stats">
         <div class="stat">
-          <div class="stat-value">${j.active_count || 0}</div>
-          <div class="stat-label">Active</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">${j.sold_count || 0}</div>
-          <div class="stat-label">Sold</div>
+          <div class="stat-value">${avgP}</div>
+          <div class="stat-label">Avg Price</div>
         </div>
         <div class="stat">
           <div class="stat-value">${j.matched_count || 0}</div>
           <div class="stat-label">Matched</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${j.active_count || 0}</div>
+          <div class="stat-label">Active</div>
         </div>
         <div class="stat">
           <div class="stat-value">${j.frequency_hours}h</div>
@@ -123,7 +130,7 @@ async function loadJobs() {
         ${j.last_run_at ? 'Last run: ' + new Date(j.last_run_at).toLocaleString() : 'Never run'}
         ${j.category ? ' · ' + esc(j.category) : ''}
       </div>
-      <div class="job-card-actions">
+      <div class="job-card-actions" onclick="event.stopPropagation()">
         <button class="btn btn-sm btn-primary" onclick="triggerRun(${j.id})">▶ Run Now</button>
         <button class="btn btn-sm btn-ghost" onclick="editJob(${j.id})">✏️ Edit</button>
         <button class="btn btn-sm btn-ghost" onclick="toggleJob(${j.id}, ${!j.active})">
@@ -131,8 +138,8 @@ async function loadJobs() {
         </button>
         <button class="btn btn-sm btn-danger" onclick="deleteJob(${j.id}, '${esc(j.name)}')">🗑</button>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 async function triggerRun(id) {
