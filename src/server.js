@@ -169,6 +169,19 @@ app.post('/api/jobs/:id/run', async (req, res) => {
 
 // ─── Listings ───────────────────────────────────────────────────
 
+app.patch('/api/listings/:id/exclude', async (req, res) => {
+    try {
+        const result = await db.query(
+            `UPDATE listings SET status = 'excluded' WHERE id = $1 RETURNING id`,
+            [req.params.id]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Listing not found' });
+        res.json({ message: 'Listing excluded' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/listings', async (req, res) => {
     const { job_id, matched_only, status, search, sort, limit = 50, offset = 0 } = req.query;
     try {

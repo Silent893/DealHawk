@@ -146,6 +146,12 @@ async function deleteJob(id, name) {
   loadJobs();
 }
 
+async function excludeListing(id) {
+  if (!confirm('Exclude this listing? It won\'t reappear on future scrapes.')) return;
+  await api('PATCH', `/listings/${id}/exclude`);
+  loadListings();
+}
+
 /* ─── Listings View ────────────────────────────────────────── */
 async function loadListings() {
   const jobFilter = document.getElementById('listing-job-filter').value;
@@ -187,11 +193,15 @@ async function loadListings() {
       `<div class="listing-card-detail-row"><span class="listing-card-detail-key">${esc(k)}</span><span>${esc(v)}</span></div>`
     ).join('');
 
-    const statusClass = l.status === 'sold' ? 'listing-badge-sold' : 'listing-badge-active';
-    const statusLabel = l.status === 'sold' ? '🔴 Sold' : '🟢 Active';
+    const statusClass = l.status === 'sold' ? 'listing-badge-sold'
+      : l.status === 'excluded' ? 'listing-badge-sold'
+        : 'listing-badge-active';
+    const statusLabel = l.status === 'sold' ? '🔴 Sold'
+      : l.status === 'excluded' ? '⛔ Excluded'
+        : '🟢 Active';
 
     return `
-      <div class="listing-card ${l.status === 'sold' ? 'listing-sold' : ''}">
+      <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
         ${imgSrc ? `<img class="listing-card-img" src="${imgSrc}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
         <div class="listing-card-body">
           <div class="listing-card-title">
@@ -229,6 +239,7 @@ async function loadListings() {
           <span class="${statusClass}">${statusLabel}</span>
           <span>${l.job_name || ''} · ${new Date(l.first_seen_at).toLocaleDateString()}</span>
           <button class="btn btn-sm btn-ghost" onclick="showPriceChart(${l.id}, '${esc(l.title || l.slug)}')" title="Price history">📈</button>
+          ${l.status !== 'excluded' ? `<button class="btn btn-sm btn-ghost" onclick="excludeListing(${l.id})" title="Exclude listing">⛔</button>` : ''}
         </div>
       </div>
     `;

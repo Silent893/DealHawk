@@ -36,21 +36,27 @@ async function runJob(job) {
     try {
         // Get known slugs for multi-page detection
         const knownResult = await db.query(
-            'SELECT slug FROM listings WHERE job_id = $1',
+            'SELECT slug, status FROM listings WHERE job_id = $1',
             [job.id]
         );
         const knownSlugs = new Set(knownResult.rows.map(r => r.slug));
+        const excludedSlugs = new Set(knownResult.rows.filter(r => r.status === 'excluded').map(r => r.slug));
 
         // ── Phase 1: Discover new listings (with multi-page) ────
         const listings = await scrapeListings(job.url, knownSlugs, browser, job.max_pages || 2);
         listingsFound = listings.length;
 
         for (const listing of listings) {
+            // Skip excluded listings entirely
+            if (excludedSlugs.has(listing.slug)) continue;
+
             const insertResult = await db.query(
                 `INSERT INTO listings (job_id, slug, title, price, price_value, price_type,
            size_text, size_perches, location, url, is_member, posted_text, status, last_seen_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', NOW())
-         ON CONFLICT (slug) DO UPDATE SET last_seen_at = NOW()
+         ON CONFLICT (slug) DO UPDATE SET
+           last_seen_at = NOW(),
+           status = CASE WHEN listings.status = 'excluded' THEN 'excluded' ELSE listings.status END
          RETURNING id, (xmax = 0) AS is_new`,
                 [
                     job.id, listing.slug, listing.title, listing.price,

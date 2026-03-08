@@ -48,6 +48,7 @@
             <option value="">All Status</option>
             <option value="active">🟢 Active</option>
             <option value="sold">🔴 Sold</option>
+            <option value="excluded">⛔ Excluded</option>
           </select>
           <select id="listing-sort">
             <option value="newest">Newest first</option>
@@ -56,7 +57,7 @@
             <option value="price_high">Price: High → Low</option>
           </select>
           <label class="checkbox-label">
-            <input type="checkbox" id="listing-matched-filter"> Matched only
+            <input type="checkbox" id="listing-matched-filter" checked> Matched only
           </label>
           <button class="btn btn-sm" onclick="loadListings()">Apply</button>
         </div>
