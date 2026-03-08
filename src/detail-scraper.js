@@ -173,44 +173,70 @@ async function checkListing(url, browser) {
 }
 
 /**
- * Evaluate whether a listing matches a set of rules (AND logic).
+ * Evaluate a single rule against a listing. Returns true if the rule matches.
+ */
+function evaluateRule(listing, rule) {
+    if (!rule.field || !rule.op || rule.value === undefined) return true;
+
+    let listingValue;
+    if (rule.field.startsWith('detail.')) {
+        const detailKey = rule.field.replace('detail.', '');
+        const rawVal = listing.detailFields ? listing.detailFields[detailKey] : undefined;
+        if (rawVal !== undefined) {
+            const numMatch = String(rawVal).match(/([\d,]+)/);
+            listingValue = numMatch ? parseFloat(numMatch[1].replace(/,/g, '')) : rawVal;
+        }
+    } else {
+        const fieldMap = {
+            size_perches: 'sizePerches', price_value: 'priceValue',
+            total_price: 'totalPrice', price_per_perch: 'pricePerPerch',
+            title: 'title', location: 'location',
+            is_member: 'isMember', price_type: 'priceType',
+        };
+        listingValue = listing[fieldMap[rule.field] || rule.field];
+    }
+
+    if (listingValue === null || listingValue === undefined) return false;
+    const ruleValue = typeof listingValue === 'number' ? Number(rule.value) : rule.value;
+
+    switch (rule.op) {
+        case '>=': return listingValue >= ruleValue;
+        case '<=': return listingValue <= ruleValue;
+        case '>': return listingValue > ruleValue;
+        case '<': return listingValue < ruleValue;
+        case '==': return String(listingValue).toLowerCase() === String(ruleValue).toLowerCase();
+        case '!=': return String(listingValue).toLowerCase() !== String(ruleValue).toLowerCase();
+        case 'contains': return String(listingValue).toLowerCase().includes(String(ruleValue).toLowerCase());
+        default: return false;
+    }
+}
+
+/**
+ * Evaluate whether a listing matches a set of rule groups.
+ * Supports: flat arrays (backward compat), or groups with mode: AND/OR/EXCLUDE.
+ * Groups combine with AND logic (all groups must pass).
  */
 function matchesRules(listing, rules) {
     if (!rules || !Array.isArray(rules) || rules.length === 0) return true;
 
-    for (const rule of rules) {
-        if (!rule.field || !rule.op || rule.value === undefined) continue;
+    // Backward compatibility: flat array of rules → treat as single AND group
+    if (rules[0] && rules[0].field) {
+        rules = [{ mode: 'AND', rules: rules }];
+    }
 
-        let listingValue;
-        if (rule.field.startsWith('detail.')) {
-            const detailKey = rule.field.replace('detail.', '');
-            const rawVal = listing.detailFields ? listing.detailFields[detailKey] : undefined;
-            if (rawVal !== undefined) {
-                const numMatch = String(rawVal).match(/([\d,]+)/);
-                listingValue = numMatch ? parseFloat(numMatch[1].replace(/,/g, '')) : rawVal;
-            }
-        } else {
-            const fieldMap = {
-                size_perches: 'sizePerches', price_value: 'priceValue',
-                total_price: 'totalPrice', price_per_perch: 'pricePerPerch',
-                title: 'title', location: 'location',
-                is_member: 'isMember', price_type: 'priceType',
-            };
-            listingValue = listing[fieldMap[rule.field] || rule.field];
-        }
+    for (const group of rules) {
+        if (!group.rules || group.rules.length === 0) continue;
+        const mode = (group.mode || 'AND').toUpperCase();
 
-        if (listingValue === null || listingValue === undefined) return false;
-        const ruleValue = typeof listingValue === 'number' ? Number(rule.value) : rule.value;
-
-        switch (rule.op) {
-            case '>=': if (!(listingValue >= ruleValue)) return false; break;
-            case '<=': if (!(listingValue <= ruleValue)) return false; break;
-            case '>': if (!(listingValue > ruleValue)) return false; break;
-            case '<': if (!(listingValue < ruleValue)) return false; break;
-            case '==': if (String(listingValue).toLowerCase() !== String(ruleValue).toLowerCase()) return false; break;
-            case '!=': if (String(listingValue).toLowerCase() === String(ruleValue).toLowerCase()) return false; break;
-            case 'contains': if (!String(listingValue).toLowerCase().includes(String(ruleValue).toLowerCase())) return false; break;
-            default: return false;
+        if (mode === 'AND') {
+            const allMatch = group.rules.every(r => evaluateRule(listing, r));
+            if (!allMatch) return false;
+        } else if (mode === 'OR') {
+            const anyMatch = group.rules.some(r => evaluateRule(listing, r));
+            if (!anyMatch) return false;
+        } else if (mode === 'EXCLUDE') {
+            const anyMatch = group.rules.some(r => evaluateRule(listing, r));
+            if (anyMatch) return false;
         }
     }
     return true;

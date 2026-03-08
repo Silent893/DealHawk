@@ -404,22 +404,28 @@ async function scanListStep() {
 
 function renderDeepDiveStep(body) {
   const fields = wizardData.card_fields.filter(f => f.type === 'number' || f.type === 'text' || f.type === 'enum');
+  // Migrate flat array to groups if needed
+  if (wizardData.deep_dive_rules.length > 0 && wizardData.deep_dive_rules[0]?.field) {
+    wizardData.deep_dive_rules = [{ mode: 'AND', rules: wizardData.deep_dive_rules }];
+  }
+  if (wizardData.deep_dive_rules.length === 0) {
+    wizardData.deep_dive_rules = [];
+  }
   body.innerHTML = `
     <p style="margin-bottom:14px;color:var(--text-secondary);font-size:0.85rem">
-      Set conditions to decide which listings to deep-dive into. Leave empty to deep-dive all.
+      Set conditions to decide which listings to deep-dive into. Leave empty to deep-dive all.<br>
+      <strong>AND</strong> = all must match · <strong>OR</strong> = any must match · <strong>EXCLUDE</strong> = skip if any match
     </p>
-    <div class="rules-list" id="deep-dive-rules"></div>
-    <button class="add-rule-btn" onclick="addRule('deep-dive-rules', 'deep_dive_rules')">+ Add Condition</button>
+    <div id="deep-dive-groups"></div>
+    <button class="add-rule-btn" onclick="addRuleGroup('deep-dive-groups', 'deep_dive_rules')">+ Add Group</button>
   `;
-  const container = document.getElementById('deep-dive-rules');
-  wizardData.deep_dive_rules.forEach((rule, i) => addRuleRow(container, 'deep_dive_rules', i, fields, rule));
+  renderRuleGroups('deep-dive-groups', 'deep_dive_rules', fields);
 }
 
 async function scanDetailStep() {
   const body = document.getElementById('wizard-body');
   body.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Deep-diving into a sample listing...</p></div>';
 
-  // Pick first sample listing URL
   const sampleUrl = wizardData.samples.length > 0 ? wizardData.samples[0].url : null;
   if (!sampleUrl) {
     body.innerHTML = '<p style="color:var(--danger)">No sample listings found to scan.</p>';
@@ -454,15 +460,22 @@ async function scanDetailStep() {
 
 function renderLogRulesStep(body) {
   const allFields = [...wizardData.card_fields, ...wizardData.detail_fields.filter(f => f.key.startsWith('detail.'))];
+  // Migrate flat array to groups if needed
+  if (wizardData.log_rules.length > 0 && wizardData.log_rules[0]?.field) {
+    wizardData.log_rules = [{ mode: 'AND', rules: wizardData.log_rules }];
+  }
+  if (wizardData.log_rules.length === 0) {
+    wizardData.log_rules = [];
+  }
   body.innerHTML = `
     <p style="margin-bottom:14px;color:var(--text-secondary);font-size:0.85rem">
-      Set filters for which listings to <strong>log as matched</strong>. Matched listings will be highlighted. Leave empty to match all.
+      Set filters for which listings to <strong>log as matched</strong>. Matched listings will be highlighted and re-checked daily. Leave empty to match all.<br>
+      <strong>AND</strong> = all must match · <strong>OR</strong> = any must match · <strong>EXCLUDE</strong> = skip if any match
     </p>
-    <div class="rules-list" id="log-rules"></div>
-    <button class="add-rule-btn" onclick="addRule('log-rules', 'log_rules')">+ Add Filter</button>
+    <div id="log-groups"></div>
+    <button class="add-rule-btn" onclick="addRuleGroup('log-groups', 'log_rules')">+ Add Group</button>
   `;
-  const container = document.getElementById('log-rules');
-  wizardData.log_rules.forEach((rule, i) => addRuleRow(container, 'log_rules', i, allFields, rule));
+  renderRuleGroups('log-groups', 'log_rules', allFields);
 }
 
 function renderSaveStep(body) {
@@ -473,6 +486,8 @@ function renderSaveStep(body) {
     else if (wizardData.url.includes('house')) cat = 'houses';
   }
   const freq = wizardData.frequency || 24;
+  const ddCount = wizardData.deep_dive_rules.reduce((s, g) => s + (g.rules?.length || 0), 0);
+  const logCount = wizardData.log_rules.reduce((s, g) => s + (g.rules?.length || 0), 0);
 
   body.innerHTML = `
     <div class="form-group">
@@ -499,51 +514,79 @@ function renderSaveStep(body) {
     ` : ''}
     <div style="margin-top:16px;padding:14px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--text-secondary)">
       <strong>Summary:</strong><br>
-      Deep-dive rules: ${wizardData.deep_dive_rules.length || 'None (all)'}<br>
-      Log filters: ${wizardData.log_rules.length || 'None (all)'}<br>
+      Deep-dive rules: ${ddCount || 'None (all)'} in ${wizardData.deep_dive_rules.length || 0} group(s)<br>
+      Log filters: ${logCount || 'None (all)'} in ${wizardData.log_rules.length || 0} group(s)<br>
       Card fields: ${wizardData.card_fields.length}<br>
       Detail fields: ${wizardData.detail_fields.length}
     </div>
   `;
 }
 
-/* ─── Rule Builder ─────────────────────────────────────────── */
-function addRule(containerId, dataKey) {
-  const fields = dataKey === 'deep_dive_rules'
-    ? wizardData.card_fields
-    : [...wizardData.card_fields, ...wizardData.detail_fields.filter(f => f.key.startsWith('detail.'))];
-
-  const idx = wizardData[dataKey].length;
-  wizardData[dataKey].push({ field: fields[0]?.key || '', op: '>=', value: '' });
+/* ─── Rule Group Builder ──────────────────────────────────── */
+function renderRuleGroups(containerId, dataKey, fields) {
   const container = document.getElementById(containerId);
-  addRuleRow(container, dataKey, idx, fields, wizardData[dataKey][idx]);
+  container.innerHTML = '';
+  wizardData[dataKey].forEach((group, gi) => {
+    const groupDiv = document.createElement('div');
+    groupDiv.style.cssText = 'border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;background:var(--bg-input)';
+    const modeColors = { AND: 'var(--primary)', OR: 'var(--success)', EXCLUDE: 'var(--danger)' };
+    groupDiv.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <select style="font-weight:600;color:${modeColors[group.mode] || 'var(--primary)'}"
+          onchange="wizardData['${dataKey}'][${gi}].mode=this.value;renderRuleGroups('${containerId}','${dataKey}',${JSON.stringify(fields).replace(/"/g, '&quot;')})">
+          ${['AND', 'OR', 'EXCLUDE'].map(m => `<option value="${m}" ${m === group.mode ? 'selected' : ''} style="color:${modeColors[m]}">${m === 'EXCLUDE' ? '🚫 EXCLUDE' : m === 'OR' ? '🔀 OR' : '✅ AND'}</option>`).join('')}
+        </select>
+        <span style="flex:1;font-size:0.75rem;color:var(--text-muted)">
+          ${group.mode === 'AND' ? 'All conditions must match' : group.mode === 'OR' ? 'Any condition can match' : 'Reject if any matches'}
+        </span>
+        <button class="rule-remove" onclick="wizardData['${dataKey}'].splice(${gi},1);renderRuleGroups('${containerId}','${dataKey}',${JSON.stringify(fields).replace(/"/g, '&quot;')})">×</button>
+      </div>
+      <div class="rules-list" id="${containerId}-g${gi}"></div>
+      <button class="add-rule-btn" style="font-size:0.75rem;padding:4px 10px" onclick="addRuleToGroup('${containerId}','${dataKey}',${gi},${JSON.stringify(fields).replace(/"/g, '&quot;')})">+ Add Rule</button>
+    `;
+    container.appendChild(groupDiv);
+    const rulesDiv = groupDiv.querySelector(`#${containerId}-g${gi}`);
+    (group.rules || []).forEach((rule, ri) => {
+      addRuleRow(rulesDiv, dataKey, gi, ri, fields, rule, containerId);
+    });
+  });
 }
 
-function addRuleRow(container, dataKey, idx, fields, rule) {
+function addRuleGroup(containerId, dataKey) {
+  const fields = dataKey === 'deep_dive_rules'
+    ? wizardData.card_fields.filter(f => f.type === 'number' || f.type === 'text' || f.type === 'enum')
+    : [...wizardData.card_fields, ...wizardData.detail_fields.filter(f => f.key.startsWith('detail.'))];
+  wizardData[dataKey].push({ mode: 'AND', rules: [] });
+  renderRuleGroups(containerId, dataKey, fields);
+}
+
+function addRuleToGroup(containerId, dataKey, gi, fields) {
+  wizardData[dataKey][gi].rules.push({ field: fields[0]?.key || '', op: '>=', value: '' });
+  renderRuleGroups(containerId, dataKey, fields);
+}
+
+function addRuleRow(container, dataKey, gi, ri, fields, rule, containerId) {
   const div = document.createElement('div');
   div.className = 'rule-row';
   div.innerHTML = `
-    <select onchange="wizardData['${dataKey}'][${idx}].field=this.value">
+    <select onchange="wizardData['${dataKey}'][${gi}].rules[${ri}].field=this.value">
       ${fields.map(f => `<option value="${f.key}" ${f.key === rule.field ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}
     </select>
-    <select onchange="wizardData['${dataKey}'][${idx}].op=this.value">
+    <select onchange="wizardData['${dataKey}'][${gi}].rules[${ri}].op=this.value">
       ${['>=', '<=', '>', '<', '==', '!=', 'contains'].map(op =>
     `<option value="${op}" ${op === rule.op ? 'selected' : ''}>${op}</option>`
   ).join('')}
     </select>
     <input value="${esc(String(rule.value || ''))}" placeholder="value"
-      onchange="wizardData['${dataKey}'][${idx}].value=this.value">
-    <button class="rule-remove" onclick="removeRule('${dataKey}',${idx},this.parentElement)">×</button>
+      onchange="wizardData['${dataKey}'][${gi}].rules[${ri}].value=this.value">
+    <button class="rule-remove" onclick="wizardData['${dataKey}'][${gi}].rules.splice(${ri},1);renderRuleGroups('${containerId}','${dataKey}',${JSON.stringify(fields).replace(/\x22/g, '&quot;')})">×</button>
   `;
   container.appendChild(div);
 }
 
 function removeRule(dataKey, idx, el) {
-  wizardData[dataKey].splice(idx, 1);
+  // Legacy — kept for backward compat but groups handle their own removal now
   el.remove();
-  // Re-render to fix indices
-  const step = dataKey === 'deep_dive_rules' ? 2 : 4;
-  if (wizardStep === step) renderWizard();
 }
 
 /* ─── Wizard Navigation ───────────────────────────────────── */
