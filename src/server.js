@@ -473,14 +473,14 @@ app.get('/api/jobs', async (req, res) => {
 });
 
 app.post('/api/jobs', async (req, res) => {
-    const { name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, is_land_mode } = req.body;
+    const { name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, is_land_mode, notification_settings } = req.body;
     if (!name || !url) {
         return res.status(400).json({ error: 'Name and URL are required' });
     }
     try {
         const result = await db.query(
-            `INSERT INTO jobs (name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, is_land_mode, last_run_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+            `INSERT INTO jobs (name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, is_land_mode, notification_settings, last_run_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
        RETURNING *`,
             [name, url, category || null,
                 JSON.stringify(card_fields || []),
@@ -489,7 +489,8 @@ app.post('/api/jobs', async (req, res) => {
                 JSON.stringify(log_rules || []),
                 frequency_hours || 24,
                 max_pages || 2,
-                is_land_mode || false]
+                is_land_mode || false,
+                JSON.stringify(notification_settings || { notify_new: true, notify_price_drop: true, notify_sold: false, notify_summary: true })]
         );
         const job = result.rows[0];
         res.json(job);
@@ -504,7 +505,7 @@ app.post('/api/jobs', async (req, res) => {
 
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, url, category, deep_dive_rules, log_rules, frequency_hours, active, is_land_mode } = req.body;
+    const { name, url, category, deep_dive_rules, log_rules, frequency_hours, active, is_land_mode, notification_settings } = req.body;
     try {
         const result = await db.query(
             `UPDATE jobs SET
@@ -515,12 +516,14 @@ app.put('/api/jobs/:id', async (req, res) => {
          log_rules = COALESCE($5, log_rules),
          frequency_hours = COALESCE($6, frequency_hours),
          active = COALESCE($7, active),
-         is_land_mode = COALESCE($8, is_land_mode)
-       WHERE id = $9 RETURNING *`,
+         is_land_mode = COALESCE($8, is_land_mode),
+         notification_settings = COALESCE($9, notification_settings)
+       WHERE id = $10 RETURNING *`,
             [name, url, category,
                 deep_dive_rules ? JSON.stringify(deep_dive_rules) : null,
                 log_rules ? JSON.stringify(log_rules) : null,
-                frequency_hours, active, is_land_mode, id]
+                frequency_hours, active, is_land_mode,
+                notification_settings ? JSON.stringify(notification_settings) : null, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
         res.json(result.rows[0]);

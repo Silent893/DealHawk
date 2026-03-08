@@ -148,6 +148,17 @@ const MIGRATIONS = [
       WHERE price_value IS NOT NULL AND price_per_perch IS NULL;
     `,
   },
+  {
+    name: 'add_notification_settings',
+    sql: `
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='jobs' AND column_name='notification_settings') THEN
+          ALTER TABLE jobs ADD COLUMN notification_settings JSONB
+            DEFAULT '{"notify_new":true,"notify_price_drop":true,"notify_sold":false,"notify_summary":true}'::jsonb;
+        END IF;
+      END $$;
+    `,
+  },
 ];
 
 async function migrate() {

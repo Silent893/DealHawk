@@ -2,6 +2,7 @@ const db = require('./db');
 const config = require('./config');
 const { scrapeListings, getBrowser } = require('./scraper');
 const { scrapeDetail, matchesRules, checkListing } = require('./detail-scraper');
+const { notify } = require('./notifier');
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -133,6 +134,17 @@ async function runJob(job) {
                 console.log(`  ✓ NEW: ${listing.title || listing.slug}`);
                 console.log(`    ${listing.sizeText} | ${listing.price} | ${listing.location}`);
 
+                // Notify: new listing
+                const ns = job.notification_settings || {};
+                if (ns.notify_new) {
+                    notify('new_listing', {
+                        job_name: job.name, job_id: job.id,
+                        title: listing.title, price: listing.price, url: listing.url,
+                        price_per_perch: pricePerPerch, total_price: totalPrice,
+                        size_perches: listing.sizePerches, location: listing.location,
+                    });
+                }
+
                 // Record initial price
                 if (listing.priceValue) {
                     await db.query(
@@ -202,6 +214,15 @@ async function runJob(job) {
                         await db.query("UPDATE listings SET status = 'sold', sold_at = COALESCE(sold_at, NOW()) WHERE id = $1", [listing.id]);
                         soldDetected++;
                         console.log(`    🔴 SOLD: ${listing.title || listing.slug}`);
+
+                        // Notify: sold
+                        const ns = job.notification_settings || {};
+                        if (ns.notify_sold) {
+                            notify('sold', {
+                                job_name: job.name, job_id: job.id,
+                                title: listing.title || listing.slug, url: listing.url,
+                            });
+                        }
                         continue;
                     }
 
@@ -235,6 +256,19 @@ async function runJob(job) {
                             console.log(`    ${arrow} PRICE CHANGE: ${listing.title || listing.slug}`);
                             console.log(`      Rs ${oldCompare.toLocaleString()}${label} → Rs ${newCompare.toLocaleString()}${label} (${pct}%)`);
 
+                            // Notify: price drop (only drops, not increases)
+                            if (diff < 0) {
+                                const ns = job.notification_settings || {};
+                                if (ns.notify_price_drop) {
+                                    notify('price_drop', {
+                                        job_name: job.name, job_id: job.id,
+                                        title: listing.title || listing.slug, url: listing.url,
+                                        old_price: oldCompare, new_price: newCompare,
+                                        pct: parseFloat(pct), is_land_mode: job.is_land_mode || false,
+                                    });
+                                }
+                            }
+
                             await db.query(
                                 `UPDATE listings SET price_value = $1, price_type = $2, price = $3,
                                  price_per_perch = $4, total_price = $5 WHERE id = $6`,
@@ -249,6 +283,17 @@ async function runJob(job) {
         }
 
         console.log(`\n[${job.name}] Summary: ${listingsFound} found, ${newListings} new, ${deepDived} deep-dived, ${rechecked} re-checked, ${priceChanges} price changes, ${soldDetected} sold`);
+
+        // Notify: run summary
+        const ns = job.notification_settings || {};
+        if (ns.notify_summary && (newListings > 0 || priceChanges > 0 || soldDetected > 0)) {
+            notify('run_summary', {
+                job_name: job.name, job_id: job.id,
+                listings_found: listingsFound, new_listings: newListings,
+                price_changes: priceChanges, sold_detected: soldDetected,
+                deep_dived: deepDived, rechecked,
+            });
+        }
 
         await db.query(
             `UPDATE scrape_runs SET finished_at = NOW(),

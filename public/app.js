@@ -576,6 +576,24 @@ function renderSaveStep(body) {
       <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">All stats and charts will use price/perch instead of total price.</div>
     </div>
     ` : ''}
+    <div class="form-group">
+      <label class="form-label">🔔 Notifications</label>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
+          <input type="checkbox" id="wiz-notify-new" checked> 🆕 New listings found
+        </label>
+        <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
+          <input type="checkbox" id="wiz-notify-price-drop" checked> 🔻 Price drops detected
+        </label>
+        <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
+          <input type="checkbox" id="wiz-notify-sold"> 🔴 Listings sold
+        </label>
+        <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
+          <input type="checkbox" id="wiz-notify-summary" checked> 📊 Run summary
+        </label>
+      </div>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Sends notifications to Home Assistant when enabled.</div>
+    </div>
     <div style="margin-top:16px;padding:14px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--text-secondary)">
       <strong>Summary:</strong><br>
       Deep-dive rules: ${ddCount || 'None (all)'} in ${wizardData.deep_dive_rules.length || 0} group(s)<br>
@@ -692,6 +710,13 @@ async function wizardNext() {
       const category = document.getElementById('wiz-category').value.trim();
       const frequency = parseInt(document.getElementById('wiz-frequency').value);
 
+      const notifSettings = {
+        notify_new: document.getElementById('wiz-notify-new')?.checked ?? true,
+        notify_price_drop: document.getElementById('wiz-notify-price-drop')?.checked ?? true,
+        notify_sold: document.getElementById('wiz-notify-sold')?.checked ?? false,
+        notify_summary: document.getElementById('wiz-notify-summary')?.checked ?? true,
+      };
+
       if (wizardEditId) {
         // Update existing job
         await api('PUT', `/jobs/${wizardEditId}`, {
@@ -701,6 +726,7 @@ async function wizardNext() {
           deep_dive_rules: wizardData.deep_dive_rules,
           log_rules: wizardData.log_rules,
           frequency_hours: frequency,
+          notification_settings: notifSettings,
         });
       } else {
         // Create new job
@@ -717,6 +743,7 @@ async function wizardNext() {
           frequency_hours: frequency,
           max_pages: maxPages,
           is_land_mode: isLandMode,
+          notification_settings: notifSettings,
         });
       }
 
