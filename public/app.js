@@ -848,6 +848,10 @@ async function loadJobDetail(id) {
       api('GET', `/jobs/${id}/price-history`),
     ]);
 
+    // Save original analytics for restore after group selection
+    window._originalJobAnalytics = analytics;
+    activeGroupKey = null;
+
     renderJobStats(analytics);
     renderPriceChart(history);
 
@@ -878,13 +882,21 @@ function formatPrice(val) {
   return 'Rs ' + val.toLocaleString();
 }
 
-function renderJobStats(a) {
+function renderJobStats(a, groupLabel) {
   const trendArrow = a.price.trendPct !== null
     ? (a.price.trendPct < 0 ? `🔻 ${a.price.trendPct}%` : `🔺 +${a.price.trendPct}%`)
     : '—';
   const demandIcons = { hot: '🔥 Hot', warm: '🌡️ Warm', cool: '❄️ Cool', unknown: '❓' };
+  const totalMarket = a.price.avg && a.price.matchedCount ? formatPrice(a.price.avg * a.price.matchedCount) : '—';
 
-  document.getElementById('job-stats-bar').innerHTML = `
+  const header = groupLabel
+    ? `<div style="width:100%;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:0.85rem;color:var(--accent);font-weight:600">📊 ${esc(groupLabel)} Group Stats</span>
+        <button class="btn btn-sm btn-ghost" onclick="clearGroupSelection()" style="font-size:0.75rem">Show All ✕</button>
+       </div>`
+    : '';
+
+  document.getElementById('job-stats-bar').innerHTML = header + `
     <div class="stat-card">
       <div class="stat-card-value">${formatPrice(a.price.avg)}</div>
       <div class="stat-card-label">Avg Price</div>
@@ -896,25 +908,71 @@ function renderJobStats(a) {
       <div style="font-size:0.75rem;color:var(--text-muted)">Median: ${formatPrice(a.price.median)}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-value">${demandIcons[a.timeToSell.demandLevel]}</div>
+      <div class="stat-card-value">${demandIcons[a.timeToSell?.demandLevel || 'unknown']}</div>
       <div class="stat-card-label">Demand</div>
-      <div style="font-size:0.75rem;color:var(--text-muted)">Avg sell: ${a.timeToSell.avgDays || '?'} days</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">Avg sell: ${a.timeToSell?.avgDays || '?'} days</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-value">${a.price.matchedCount}</div>
-      <div class="stat-card-label">Matched</div>
-      <div style="font-size:0.75rem;color:var(--text-muted)">${a.priceDrops.count} price drops</div>
+      <div class="stat-card-label">Listings</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${a.price.activeCount || 0} active · ${a.price.soldCount || 0} sold</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-value">+${a.ratio.new7d} / -${a.ratio.sold7d}</div>
+      <div class="stat-card-value">${totalMarket}</div>
+      <div class="stat-card-label">Total Market Value</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${a.priceDrops?.count || 0} price drops</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value">+${a.ratio?.new7d || 0} / -${a.ratio?.sold7d || 0}</div>
       <div class="stat-card-label">New / Sold (7d)</div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-value">${a.age.avgDays || '?'}d</div>
+      <div class="stat-card-value">${a.age?.avgDays || '?'}d</div>
       <div class="stat-card-label">Avg Listing Age</div>
-      <div style="font-size:0.75rem;color:var(--text-muted)">${a.age.postedToday} new today</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${a.age?.postedToday || 0} new today</div>
     </div>
   `;
+}
+
+// Compute same analytics structure from raw listing data (for group-level stats)
+function computeStatsFromListings(listings) {
+  const prices = listings.filter(l => l.price_value).map(l => parseFloat(l.price_value)).sort((a, b) => a - b);
+  const activePrices = listings.filter(l => l.status === 'active' && l.price_value).map(l => parseFloat(l.price_value)).sort((a, b) => a - b);
+  const active = listings.filter(l => l.status === 'active');
+  const sold = listings.filter(l => l.status === 'sold');
+  const avg = activePrices.length ? Math.round(activePrices.reduce((s, v) => s + v, 0) / activePrices.length) : 0;
+  const median = activePrices.length ? activePrices[Math.floor(activePrices.length / 2)] : 0;
+  const min = activePrices.length ? activePrices[0] : 0;
+  const max = activePrices.length ? activePrices[activePrices.length - 1] : 0;
+
+  // Price drops
+  const drops = listings.filter(l => parseInt(l.price_changes) > 0).length;
+
+  // New in 7d
+  const now = Date.now();
+  const sevenDays = 7 * 86400000;
+  const new7d = listings.filter(l => l.first_seen_at && (now - new Date(l.first_seen_at).getTime()) < sevenDays).length;
+  const sold7d = sold.filter(l => l.sold_at && (now - new Date(l.sold_at).getTime()) < sevenDays).length;
+
+  // Listing age
+  const ages = listings.filter(l => l.posted_at).map(l => Math.floor((now - new Date(l.posted_at).getTime()) / 86400000));
+  const avgAge = ages.length ? Math.round(ages.reduce((s, v) => s + v, 0) / ages.length) : null;
+  const postedToday = ages.filter(a => a === 0).length;
+
+  // Time to sell
+  const sellTimes = sold.filter(l => l.posted_at && l.sold_at)
+    .map(l => Math.floor((new Date(l.sold_at).getTime() - new Date(l.posted_at).getTime()) / 86400000));
+  const avgSellDays = sellTimes.length ? Math.round(sellTimes.reduce((s, v) => s + v, 0) / sellTimes.length) : null;
+  let demandLevel = 'unknown';
+  if (avgSellDays !== null) demandLevel = avgSellDays <= 7 ? 'hot' : avgSellDays <= 21 ? 'warm' : 'cool';
+
+  return {
+    price: { avg, min, max, median, matchedCount: listings.length, activeCount: active.length, soldCount: sold.length, trendPct: null },
+    timeToSell: { avgDays: avgSellDays, demandLevel },
+    priceDrops: { count: drops },
+    ratio: { new7d, sold7d },
+    age: { avgDays: avgAge, postedToday },
+  };
 }
 
 function renderPriceChart(history) {
@@ -1035,31 +1093,41 @@ function selectGroup(key) {
   activeGroupKey = activeGroupKey === key ? null : key;
   renderJobGroups(currentGroups);
 
-  // Filter listings by group if custom groups have listing_ids
-  const group = currentGroups.find(g => g.group_key === activeGroupKey);
-  if (group && group.listing_ids && group.listing_ids.length > 0) {
-    // Fetch those specific listings
-    filterListingsByIds(group.listing_ids);
-  } else if (activeGroupKey && !group?.listing_ids) {
-    // Auto-group: filter by search
-    loadJobListingsFiltered();
+  if (activeGroupKey) {
+    const group = currentGroups.find(g => g.group_key === activeGroupKey);
+    if (group && group.listing_ids && group.listing_ids.length > 0) {
+      filterListingsByIds(group.listing_ids, activeGroupKey);
+    } else {
+      loadJobListingsFiltered();
+    }
   } else {
+    // Restore original job stats
+    if (window._originalJobAnalytics) renderJobStats(window._originalJobAnalytics);
     loadJobListingsFiltered();
   }
 }
 
-async function filterListingsByIds(ids) {
+async function filterListingsByIds(ids, groupLabel) {
   if (!currentJobId || !ids?.length) return;
-  const data = await api('GET', `/listings?job_id=${currentJobId}&matched_only=true&limit=200`);
+  // Fetch ALL listings (not just active) so we can compute sold stats too
+  const data = await api('GET', `/listings?job_id=${currentJobId}&limit=500`);
   const all = data.listings || data;
-  const filtered = all.filter(l => ids.includes(l.id));
-  renderJobListings(filtered);
-  document.getElementById('job-listings-pagination').innerHTML = `<span style="color:var(--text-muted);font-size:0.85rem">${filtered.length} listings in this group</span>`;
+  const groupListings = all.filter(l => ids.includes(l.id));
+
+  // Compute and show full stats for this group
+  const groupAnalytics = computeStatsFromListings(groupListings);
+  renderJobStats(groupAnalytics, groupLabel);
+
+  // Show active listings in the grid
+  renderJobListings(groupListings);
+  document.getElementById('job-listings-pagination').innerHTML =
+    `<span style="color:var(--text-muted);font-size:0.85rem">${groupListings.length} listings in group "${esc(groupLabel)}"</span>`;
 }
 
 function clearGroupSelection() {
   activeGroupKey = null;
   renderJobGroups(currentGroups);
+  if (window._originalJobAnalytics) renderJobStats(window._originalJobAnalytics);
   loadJobListingsFiltered();
 }
 

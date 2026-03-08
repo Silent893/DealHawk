@@ -147,6 +147,8 @@ app.get('/api/jobs/:id/analytics', async (req, res) => {
                 max: parseFloat(stats.max_price) || null,
                 median: parseFloat(stats.median_price) || null,
                 matchedCount: parseInt(stats.matched_count),
+                activeCount: parseInt(stats.matched_count),
+                soldCount: parseInt(tts.sold_count),
                 trendPct: trendPct ? parseFloat(trendPct) : null,
             },
             timeToSell: {
