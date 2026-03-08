@@ -57,7 +57,8 @@ async function scrapePage(page, url) {
             const sizeText = detailsEl ? detailsEl.textContent.trim() : '';
             const sizeMatch = sizeText.match(/([\d,.]+)\s*perch/i);
             const priceText = priceEl ? priceEl.textContent.trim() : '';
-            const priceMatch = priceText.match(/Rs\s*([\d,]+)\s*(per\s*perch|total\s*price)/i);
+            const priceMatch = priceText.match(/Rs\s*([\d,]+)/i);
+            const priceTypeMatch = priceText.match(/(per\s*perch|total\s*price)/i);
             const descText = descEl ? descEl.textContent.trim() : '';
             const locMatch = descText.match(/^(.+?),/);
 
@@ -66,8 +67,8 @@ async function scrapePage(page, url) {
                 title: titleEl ? titleEl.textContent.trim() : '',
                 price: priceText,
                 priceValue: priceMatch ? parseFloat(priceMatch[1].replace(/,/g, '')) : null,
-                priceType: priceMatch
-                    ? (priceMatch[2].toLowerCase().includes('per') ? 'per_perch' : 'total')
+                priceType: priceTypeMatch
+                    ? (priceTypeMatch[1].toLowerCase().includes('per') ? 'per_perch' : 'total')
                     : null,
                 sizeText,
                 sizePerches: sizeMatch ? parseFloat(sizeMatch[1].replace(',', '')) : null,
