@@ -151,7 +151,7 @@ async function checkListing(url, browser) {
         const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: config.scrapeTimeout });
         const status = response ? response.status() : 0;
 
-        if (status === 404 || status >= 500) {
+        if (status === 404 || status === 410 || status >= 500) {
             await page.close();
             return { alive: false, priceValue: null, priceType: null, priceText: '' };
         }
@@ -162,7 +162,7 @@ async function checkListing(url, browser) {
             await page.close();
             return { alive: false, priceValue: null, priceType: null, priceText: '' };
         }
-        if (pageContent.includes('This ad is no longer available') || pageContent.includes('Ad not found')) {
+        if (pageContent.includes('This ad is no longer available') || pageContent.includes('Ad not found') || pageContent.includes('has been sold')) {
             await page.close();
             return { alive: false, priceValue: null, priceType: null, priceText: '' };
         }
