@@ -43,6 +43,201 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
+// ─── Job Analytics ──────────────────────────────────────────────
+
+app.get('/api/jobs/:id/analytics', async (req, res) => {
+    const jobId = req.params.id;
+    try {
+        // Avg price (matched + active only)
+        const avgResult = await db.query(`
+            SELECT
+                COUNT(*) AS matched_count,
+                ROUND(AVG(price_value)) AS avg_price,
+                ROUND(MIN(price_value)) AS min_price,
+                ROUND(MAX(price_value)) AS max_price,
+                ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price_value)) AS median_price
+            FROM listings
+            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND price_value IS NOT NULL
+        `, [jobId]);
+
+        // Time-to-sell (avg days from posted_at to sold_at for sold listings)
+        const ttsResult = await db.query(`
+            SELECT
+                COUNT(*) AS sold_count,
+                ROUND(AVG(EXTRACT(EPOCH FROM (COALESCE(sold_at, NOW()) - posted_at)) / 86400)::numeric, 1) AS avg_days_to_sell,
+                ROUND(MIN(EXTRACT(EPOCH FROM (COALESCE(sold_at, NOW()) - posted_at)) / 86400)::numeric, 1) AS min_days_to_sell,
+                ROUND(MAX(EXTRACT(EPOCH FROM (COALESCE(sold_at, NOW()) - posted_at)) / 86400)::numeric, 1) AS max_days_to_sell
+            FROM listings
+            WHERE job_id = $1 AND status = 'sold' AND posted_at IS NOT NULL
+        `, [jobId]);
+
+        // New vs sold in last 7 days
+        const ratioResult = await db.query(`
+            SELECT
+                (SELECT COUNT(*) FROM listings WHERE job_id = $1 AND first_seen_at > NOW() - INTERVAL '7 days') AS new_7d,
+                (SELECT COUNT(*) FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '7 days') AS sold_7d
+        `, [jobId]);
+
+        // Price drops (listings with more than 1 price entry where latest < earliest)
+        const dropsResult = await db.query(`
+            SELECT COUNT(*) AS drop_count FROM (
+                SELECT ph.listing_id,
+                    (array_agg(ph.price_value ORDER BY ph.recorded_at ASC))[1] AS first_price,
+                    (array_agg(ph.price_value ORDER BY ph.recorded_at DESC))[1] AS last_price,
+                    COUNT(*) AS changes
+                FROM price_history ph
+                JOIN listings l ON l.id = ph.listing_id
+                WHERE l.job_id = $1 AND l.matched_log = true AND l.status = 'active'
+                GROUP BY ph.listing_id
+                HAVING COUNT(*) > 1
+            ) sub WHERE last_price < first_price
+        `, [jobId]);
+
+        // Price trend: avg price 7 days ago vs now
+        const trendResult = await db.query(`
+            SELECT
+                ROUND(AVG(CASE WHEN ph.recorded_at > NOW() - INTERVAL '7 days' THEN ph.price_value END)) AS avg_recent,
+                ROUND(AVG(CASE WHEN ph.recorded_at <= NOW() - INTERVAL '7 days' AND ph.recorded_at > NOW() - INTERVAL '14 days' THEN ph.price_value END)) AS avg_prev
+            FROM price_history ph
+            JOIN listings l ON l.id = ph.listing_id
+            WHERE l.job_id = $1 AND l.matched_log = true
+        `, [jobId]);
+
+        // Listing age stats
+        const ageResult = await db.query(`
+            SELECT
+                ROUND(AVG(EXTRACT(EPOCH FROM (NOW() - posted_at)) / 86400)::numeric, 1) AS avg_age_days,
+                COUNT(CASE WHEN posted_at > NOW() - INTERVAL '1 day' THEN 1 END) AS posted_today,
+                COUNT(CASE WHEN posted_at > NOW() - INTERVAL '7 days' THEN 1 END) AS posted_this_week
+            FROM listings
+            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND posted_at IS NOT NULL
+        `, [jobId]);
+
+        // Group stats by detail fields (top groups)
+        const groupResult = await db.query(`
+            SELECT detail_fields
+            FROM listings
+            WHERE job_id = $1 AND detail_fields IS NOT NULL AND matched_log = true AND status = 'active'
+            LIMIT 1
+        `, [jobId]);
+        const availableGroupFields = groupResult.rows.length > 0
+            ? Object.keys(JSON.parse(typeof groupResult.rows[0].detail_fields === 'string' ? groupResult.rows[0].detail_fields : JSON.stringify(groupResult.rows[0].detail_fields)))
+            : [];
+
+        const stats = avgResult.rows[0];
+        const tts = ttsResult.rows[0];
+        const ratio = ratioResult.rows[0];
+        const drops = dropsResult.rows[0];
+        const trend = trendResult.rows[0];
+        const age = ageResult.rows[0];
+
+        // Demand gauge: < 7 days avg sell = Hot, < 14 = Warm, else Cool
+        const demandLevel = tts.avg_days_to_sell
+            ? (parseFloat(tts.avg_days_to_sell) < 7 ? 'hot' : parseFloat(tts.avg_days_to_sell) < 14 ? 'warm' : 'cool')
+            : 'unknown';
+
+        const trendPct = (trend.avg_recent && trend.avg_prev)
+            ? (((trend.avg_recent - trend.avg_prev) / trend.avg_prev) * 100).toFixed(1)
+            : null;
+
+        res.json({
+            price: {
+                avg: parseFloat(stats.avg_price) || null,
+                min: parseFloat(stats.min_price) || null,
+                max: parseFloat(stats.max_price) || null,
+                median: parseFloat(stats.median_price) || null,
+                matchedCount: parseInt(stats.matched_count),
+                trendPct: trendPct ? parseFloat(trendPct) : null,
+            },
+            timeToSell: {
+                avgDays: parseFloat(tts.avg_days_to_sell) || null,
+                minDays: parseFloat(tts.min_days_to_sell) || null,
+                maxDays: parseFloat(tts.max_days_to_sell) || null,
+                soldCount: parseInt(tts.sold_count),
+                demandLevel,
+            },
+            ratio: {
+                new7d: parseInt(ratio.new_7d),
+                sold7d: parseInt(ratio.sold_7d),
+            },
+            priceDrops: {
+                count: parseInt(drops.drop_count),
+            },
+            age: {
+                avgDays: parseFloat(age.avg_age_days) || null,
+                postedToday: parseInt(age.posted_today),
+                postedThisWeek: parseInt(age.posted_this_week),
+            },
+            availableGroupFields,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:id/price-history', async (req, res) => {
+    const jobId = req.params.id;
+    const groupBy = req.query.group_by || null;
+    try {
+        let result;
+        if (groupBy) {
+            // Group by a detail field
+            result = await db.query(`
+                SELECT
+                    DATE_TRUNC('day', ph.recorded_at) AS day,
+                    l.detail_fields->>'${groupBy.replace(/[^a-zA-Z0-9_ ]/g, '')}' AS group_key,
+                    ROUND(AVG(ph.price_value)) AS avg_price,
+                    COUNT(DISTINCT l.id) AS listing_count
+                FROM price_history ph
+                JOIN listings l ON l.id = ph.listing_id
+                WHERE l.job_id = $1 AND l.matched_log = true
+                GROUP BY day, group_key
+                ORDER BY day
+            `, [jobId]);
+        } else {
+            result = await db.query(`
+                SELECT
+                    DATE_TRUNC('day', ph.recorded_at) AS day,
+                    ROUND(AVG(ph.price_value)) AS avg_price,
+                    COUNT(DISTINCT ph.listing_id) AS listing_count
+                FROM price_history ph
+                JOIN listings l ON l.id = ph.listing_id
+                WHERE l.job_id = $1 AND l.matched_log = true
+                GROUP BY day
+                ORDER BY day
+            `, [jobId]);
+        }
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:id/groups', async (req, res) => {
+    const jobId = req.params.id;
+    const field = req.query.field;
+    if (!field) return res.status(400).json({ error: 'field param required' });
+    try {
+        const safeField = field.replace(/[^a-zA-Z0-9_ ]/g, '');
+        const result = await db.query(`
+            SELECT
+                detail_fields->>'${safeField}' AS group_key,
+                COUNT(*) AS count,
+                ROUND(AVG(price_value)) AS avg_price,
+                ROUND(MIN(price_value)) AS min_price,
+                ROUND(MAX(price_value)) AS max_price
+            FROM listings
+            WHERE job_id = $1 AND matched_log = true AND status = 'active' AND detail_fields IS NOT NULL
+            GROUP BY group_key
+            HAVING detail_fields->>'${safeField}' IS NOT NULL
+            ORDER BY count DESC
+        `, [jobId]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Scan endpoints (for wizard) ────────────────────────────────
 
 app.post('/api/scan/list', async (req, res) => {
