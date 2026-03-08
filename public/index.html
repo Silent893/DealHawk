@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DealHawk</title>
+  <link rel="stylesheet" href="/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1 class="logo">🦅 DealHawk</h1>
+      </div>
+      <nav class="header-nav">
+        <button class="nav-btn active" data-view="jobs">Jobs</button>
+        <button class="nav-btn" data-view="listings">Listings</button>
+        <button class="nav-btn" data-view="runs">Run History</button>
+      </nav>
+      <button class="btn btn-primary" id="new-job-btn">+ New Job</button>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main" id="main-content">
+      <!-- Jobs View -->
+      <section class="view active" id="jobs-view">
+        <div class="stats-overview" id="stats-overview"></div>
+        <div class="jobs-grid" id="jobs-grid"></div>
+        <div class="empty-state" id="jobs-empty" style="display:none">
+          <p>No jobs configured yet.</p>
+          <button class="btn btn-primary" onclick="openWizard()">Create your first job</button>
+        </div>
+      </section>
+
+      <!-- Listings View -->
+      <section class="view" id="listings-view">
+        <div class="filter-bar" id="listings-filter-bar">
+          <input class="form-input" id="listing-search" placeholder="Search title..." style="max-width:200px"
+            onkeyup="if(event.key==='Enter')loadListings()">
+          <select id="listing-job-filter">
+            <option value="">All Jobs</option>
+          </select>
+          <select id="listing-status-filter">
+            <option value="">All Status</option>
+            <option value="active">🟢 Active</option>
+            <option value="sold">🔴 Sold</option>
+          </select>
+          <select id="listing-sort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="price_low">Price: Low → High</option>
+            <option value="price_high">Price: High → Low</option>
+          </select>
+          <label class="checkbox-label">
+            <input type="checkbox" id="listing-matched-filter"> Matched only
+          </label>
+          <button class="btn btn-sm" onclick="loadListings()">Apply</button>
+        </div>
+        <div class="listings-grid" id="listings-grid"></div>
+        <div class="pagination" id="listings-pagination"></div>
+      </section>
+
+      <!-- Runs View -->
+      <section class="view" id="runs-view">
+        <div class="runs-table-wrap" id="runs-table-wrap"></div>
+      </section>
+    </main>
+
+    <!-- Wizard Modal -->
+    <div class="modal-overlay" id="wizard-overlay" style="display:none">
+      <div class="modal wizard-modal">
+        <div class="modal-header">
+          <h2 id="wizard-title">New Job</h2>
+          <button class="modal-close" onclick="closeWizard()">&times;</button>
+        </div>
+        <div class="wizard-steps">
+          <div class="step-indicator" id="step-indicators"></div>
+        </div>
+        <div class="modal-body" id="wizard-body"></div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="wizard-back" onclick="wizardBack()">Back</button>
+          <button class="btn btn-primary" id="wizard-next" onclick="wizardNext()">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+
+</html>

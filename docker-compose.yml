@@ -1,0 +1,11 @@
+services:
+  dealhawk:
+    build: .
+    container_name: dealhawk
+    restart: unless-stopped
+    ports:
+      - "3082:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./data/images:/app/data/images
