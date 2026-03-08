@@ -153,14 +153,17 @@ async function checkListing(url, browser) {
         }
 
         const priceData = await page.evaluate(() => {
-            const priceEl = document.querySelector('[class*="price--"]');
+            // Target the main listing's price section specifically, not similar-ad cards
+            const priceEl = document.querySelector('[class*="price-section--"]') ||
+                document.querySelector('[class*="amount--"]');
             const priceText = priceEl ? priceEl.textContent.trim() : '';
-            const match = priceText.match(/Rs\s*([\d,]+)\s*(per\s*perch|total\s*price)?/i);
+            const match = priceText.match(/Rs\s*([\d,]+)/i);
+            const typeMatch = priceText.match(/(per\s*perch|total\s*price)/i);
             return {
-                priceText,
+                priceText: match ? `Rs ${match[1]}` : priceText,
                 priceValue: match ? parseFloat(match[1].replace(/,/g, '')) : null,
-                priceType: match && match[2]
-                    ? (match[2].toLowerCase().includes('per') ? 'per_perch' : 'total')
+                priceType: typeMatch
+                    ? (typeMatch[1].toLowerCase().includes('per') ? 'per_perch' : 'total')
                     : null,
             };
         });
