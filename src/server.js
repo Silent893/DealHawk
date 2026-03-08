@@ -95,8 +95,8 @@ app.post('/api/jobs', async (req, res) => {
     }
     try {
         const result = await db.query(
-            `INSERT INTO jobs (name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            `INSERT INTO jobs (name, url, category, card_fields, detail_fields, deep_dive_rules, log_rules, frequency_hours, max_pages, last_run_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
        RETURNING *`,
             [name, url, category || null,
                 JSON.stringify(card_fields || []),
