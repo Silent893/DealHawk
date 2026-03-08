@@ -795,3 +795,6 @@ async function showPriceChart(listingId, title) {
 
 /* ─── Init ─────────────────────────────────────────────────── */
 loadJobs();
+api('GET', '/version').then(d => {
+  document.getElementById('app-version').textContent = `v${d.version}`;
+}).catch(() => { });

@@ -14,6 +14,11 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const IMAGES_DIR = config.imagesDir || path.join(__dirname, '..', 'data', 'images');
 app.use('/api/images', express.static(IMAGES_DIR));
 
+// ─── Version ────────────────────────────────────────────────────
+
+const pkg = require('../package.json');
+app.get('/api/version', (req, res) => res.json({ version: pkg.version }));
+
 // ─── Dashboard stats ────────────────────────────────────────────
 
 app.get('/api/stats', async (req, res) => {
