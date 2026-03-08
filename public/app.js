@@ -861,7 +861,9 @@ async function loadJobDetail(id) {
 
     document.getElementById('job-groups-grid').innerHTML = '';
 
-    // Load listings via filter bar
+    // Restore saved custom rules + load listings
+    customGroupRules = [];
+    loadSavedCustomRules();
     jobListingPage = 0;
     loadJobListingsFiltered();
   } catch (err) {
@@ -1064,9 +1066,30 @@ function clearGroupSelection() {
 /* ─── Custom Group Rules ──────────────────────────────────── */
 let customGroupRules = [];
 
+function saveCustomRules() {
+  if (!currentJobId) return;
+  localStorage.setItem(`dh_rules_${currentJobId}`, JSON.stringify(customGroupRules));
+}
+
+function loadSavedCustomRules() {
+  if (!currentJobId) return;
+  try {
+    const saved = localStorage.getItem(`dh_rules_${currentJobId}`);
+    if (saved) {
+      customGroupRules = JSON.parse(saved);
+      renderCustomGroupRules();
+      // Auto-open and apply if we have saved rules
+      if (customGroupRules.length > 0) {
+        document.querySelector('#job-detail-view details')?.setAttribute('open', '');
+        applyCustomGroups();
+      }
+    }
+  } catch { }
+}
+
 function addCustomGroupRule() {
-  const fields = (window._jobGroupFields || []).map(f => `<option value="${f}">${f}</option>`).join('');
-  customGroupRules.push({ name: '', field: '', op: 'contains', value: '' });
+  customGroupRules.push({ name: '', field: 'title', op: 'contains', value: '' });
+  saveCustomRules();
   renderCustomGroupRules();
 }
 
@@ -1077,19 +1100,19 @@ function renderCustomGroupRules() {
   container.innerHTML = customGroupRules.map((r, i) => `
     <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap">
       <input class="form-input" style="width:100px" placeholder="Group name" value="${esc(r.name)}"
-        onchange="customGroupRules[${i}].name=this.value">
-      <select class="form-input" style="width:120px" onchange="customGroupRules[${i}].field=this.value">
+        onchange="customGroupRules[${i}].name=this.value;saveCustomRules()">
+      <select class="form-input" style="width:120px" onchange="customGroupRules[${i}].field=this.value;saveCustomRules()">
         ${fieldOpts.replace(`value="${r.field}"`, `value="${r.field}" selected`)}
       </select>
-      <select class="form-input" style="width:110px" onchange="customGroupRules[${i}].op=this.value">
+      <select class="form-input" style="width:110px" onchange="customGroupRules[${i}].op=this.value;saveCustomRules()">
         <option value="contains" ${r.op === 'contains' ? 'selected' : ''}>contains</option>
         <option value="equals" ${r.op === 'equals' ? 'selected' : ''}>equals</option>
         <option value="starts_with" ${r.op === 'starts_with' ? 'selected' : ''}>starts with</option>
         <option value="regex" ${r.op === 'regex' ? 'selected' : ''}>regex</option>
       </select>
       <input class="form-input" style="width:120px" placeholder="Value" value="${esc(r.value)}"
-        onchange="customGroupRules[${i}].value=this.value">
-      <button class="btn btn-sm btn-danger" onclick="customGroupRules.splice(${i},1);renderCustomGroupRules()">✕</button>
+        onchange="customGroupRules[${i}].value=this.value;saveCustomRules()">
+      <button class="btn btn-sm btn-danger" onclick="customGroupRules.splice(${i},1);saveCustomRules();renderCustomGroupRules()">✕</button>
     </div>
   `).join('');
 }

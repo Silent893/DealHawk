@@ -218,27 +218,42 @@ app.get('/api/jobs/:id/groups', async (req, res) => {
     const field = req.query.field;
     if (!field) return res.status(400).json({ error: 'field param required' });
     try {
-        const safeField = field.replace(/[^a-zA-Z0-9_ ]/g, '');
-        // Handle both JSONB and text-stored JSON
         const result = await db.query(`
-            SELECT
-                (CASE WHEN pg_typeof(detail_fields) = 'jsonb'::regtype
-                      THEN detail_fields
-                      ELSE detail_fields::jsonb END)->>'${safeField}' AS group_key,
-                COUNT(*) AS count,
-                ROUND(AVG(price_value)) AS avg_price,
-                ROUND(MIN(price_value)) AS min_price,
-                ROUND(MAX(price_value)) AS max_price
+            SELECT id, price_value, detail_fields
             FROM listings
             WHERE job_id = $1 AND matched_log = true AND status = 'active'
               AND detail_fields IS NOT NULL AND price_value IS NOT NULL
-            GROUP BY group_key
-            HAVING (CASE WHEN pg_typeof(detail_fields) = 'jsonb'::regtype
-                         THEN detail_fields
-                         ELSE detail_fields::jsonb END)->>'${safeField}' IS NOT NULL
-            ORDER BY count DESC
         `, [jobId]);
-        res.json(result.rows);
+
+        // Group in JS to handle both text and JSONB detail_fields
+        const groups = {};
+        for (const row of result.rows) {
+            let df = row.detail_fields;
+            if (typeof df === 'string') try { df = JSON.parse(df); } catch { continue; }
+            if (!df) continue;
+            const key = String(df[field] || '').trim();
+            if (!key) continue;
+            if (!groups[key]) groups[key] = { count: 0, sum: 0, min: Infinity, max: 0, ids: [] };
+            const price = parseFloat(row.price_value);
+            groups[key].count++;
+            groups[key].sum += price;
+            groups[key].min = Math.min(groups[key].min, price);
+            groups[key].max = Math.max(groups[key].max, price);
+            groups[key].ids.push(row.id);
+        }
+
+        const out = Object.entries(groups)
+            .map(([key, g]) => ({
+                group_key: key,
+                count: g.count,
+                avg_price: Math.round(g.sum / g.count),
+                min_price: g.min === Infinity ? 0 : g.min,
+                max_price: g.max,
+                listing_ids: g.ids,
+            }))
+            .sort((a, b) => b.count - a.count);
+
+        res.json(out);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
