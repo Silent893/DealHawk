@@ -982,38 +982,83 @@ async function loadJobGroups() {
   }
 }
 
+let activeGroupKey = null;
+let currentGroups = [];
+
 function renderJobGroups(groups) {
+  currentGroups = groups || [];
   const grid = document.getElementById('job-groups-grid');
   if (!groups || groups.length === 0) {
-    grid.innerHTML = '<p style="color:var(--text-muted)">No groups found.</p>';
+    grid.innerHTML = '';
     return;
   }
-  grid.innerHTML = groups.map(g => `
-    <div class="job-card" style="padding:14px;cursor:default">
-      <div class="job-card-header">
-        <span class="job-card-title" style="font-size:0.95rem">${esc(String(g.group_key || 'Unknown'))}</span>
-        <span class="job-card-badge badge-active">${g.count} listings</span>
-      </div>
-      <div class="job-card-stats" style="margin-top:8px">
-        <div class="stat">
-          <div class="stat-value">${formatPrice(parseFloat(g.avg_price))}</div>
-          <div class="stat-label">Avg</div>
+
+  // Show all button if a group is selected
+  const showAllBtn = activeGroupKey
+    ? `<div style="margin-bottom:12px">
+        <button class="btn btn-sm btn-ghost" onclick="clearGroupSelection()" style="color:var(--accent)">← Show All Listings</button>
+        <span style="font-size:0.85rem;color:var(--text-secondary);margin-left:8px">Filtered by: <strong>${esc(activeGroupKey)}</strong></span>
+       </div>`
+    : '';
+
+  grid.innerHTML = showAllBtn + `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">` +
+    groups.map(g => {
+      const isActive = activeGroupKey === g.group_key;
+      const borderStyle = isActive ? 'border-color:var(--accent);box-shadow:0 0 12px rgba(99,102,241,0.3)' : '';
+      return `
+      <div class="job-card" style="padding:14px;cursor:pointer;${borderStyle}" onclick="selectGroup('${esc(String(g.group_key || ''))}')">
+        <div class="job-card-header" style="margin-bottom:8px">
+          <span class="job-card-title" style="font-size:0.9rem">${esc(String(g.group_key || 'Unknown'))}</span>
+          <span class="job-card-badge badge-active" style="font-size:0.7rem">${g.count}</span>
         </div>
-        <div class="stat">
-          <div class="stat-value">${formatPrice(parseFloat(g.min_price))}</div>
-          <div class="stat-label">Min</div>
+        <div class="job-card-stats" style="gap:12px">
+          <div class="stat">
+            <div class="stat-value" style="font-size:1rem">${formatPrice(parseFloat(g.avg_price))}</div>
+            <div class="stat-label">Avg</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" style="font-size:1rem">${formatPrice(parseFloat(g.min_price))}</div>
+            <div class="stat-label">Min</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" style="font-size:1rem">${formatPrice(parseFloat(g.max_price))}</div>
+            <div class="stat-label">Max</div>
+          </div>
         </div>
-        <div class="stat">
-          <div class="stat-value">${formatPrice(parseFloat(g.max_price))}</div>
-          <div class="stat-label">Max</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">${formatPrice(parseFloat(g.max_price) - parseFloat(g.min_price))}</div>
-          <div class="stat-label">Spread</div>
-        </div>
-      </div>
-    </div>
-  `).join('');
+      </div>`;
+    }).join('') + '</div>';
+}
+
+function selectGroup(key) {
+  activeGroupKey = activeGroupKey === key ? null : key;
+  renderJobGroups(currentGroups);
+
+  // Filter listings by group if custom groups have listing_ids
+  const group = currentGroups.find(g => g.group_key === activeGroupKey);
+  if (group && group.listing_ids && group.listing_ids.length > 0) {
+    // Fetch those specific listings
+    filterListingsByIds(group.listing_ids);
+  } else if (activeGroupKey && !group?.listing_ids) {
+    // Auto-group: filter by search
+    loadJobListingsFiltered();
+  } else {
+    loadJobListingsFiltered();
+  }
+}
+
+async function filterListingsByIds(ids) {
+  if (!currentJobId || !ids?.length) return;
+  const data = await api('GET', `/listings?job_id=${currentJobId}&matched_only=true&limit=200`);
+  const all = data.listings || data;
+  const filtered = all.filter(l => ids.includes(l.id));
+  renderJobListings(filtered);
+  document.getElementById('job-listings-pagination').innerHTML = `<span style="color:var(--text-muted);font-size:0.85rem">${filtered.length} listings in this group</span>`;
+}
+
+function clearGroupSelection() {
+  activeGroupKey = null;
+  renderJobGroups(currentGroups);
+  loadJobListingsFiltered();
 }
 
 /* ─── Custom Group Rules ──────────────────────────────────── */

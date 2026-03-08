@@ -197,6 +197,31 @@ body {
   color: var(--warning);
 }
 
+/* ─── Stat Cards (Job Detail) ──────────────────────────────── */
+.stat-card {
+  flex: 1;
+  min-width: 130px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.stat-card-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.stat-card-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
 /* ─── Price Drop Badge ─────────────────────────────────────── */
 .price-drop-badge {
   display: inline-block;
