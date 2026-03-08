@@ -366,10 +366,10 @@ function renderWizard() {
 function renderUrlStep(body) {
   body.innerHTML = `
     <div class="form-group">
-      <label class="form-label">ikman.lk Listing Page URL</label>
-      <input class="form-input" id="wiz-url" placeholder="https://ikman.lk/en/ads/gampaha/land-for-sale" value="${esc(wizardData.url)}">
+      <label class="form-label">ikman.lk Listing Page URL(s)</label>
+      <textarea class="form-input" id="wiz-url" rows="3" placeholder="https://ikman.lk/en/ads/sri-lanka/cars?enum.body=convertible&#10;https://ikman.lk/en/ads/sri-lanka/cars?query=convertible" style="resize:vertical;font-family:inherit;font-size:0.85rem">${esc(wizardData.url)}</textarea>
     </div>
-    <p style="color:var(--text-muted);font-size:0.82rem">Paste the URL of any ikman.lk listing page. The scraper will scan it to discover available fields.</p>
+    <p style="color:var(--text-muted);font-size:0.82rem">Paste one or more ikman.lk URLs, one per line. Multiple URLs will be combined and deduplicated by listing. The first URL is used for field scanning.</p>
   `;
 }
 
@@ -377,8 +377,11 @@ async function scanListStep() {
   const body = document.getElementById('wizard-body');
   body.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Scanning list page for cards...</p></div>';
 
+  // Use first URL for scanning
+  const firstUrl = wizardData.url.split('\n').map(u => u.trim()).find(u => u.startsWith('http')) || wizardData.url;
+
   try {
-    const result = await api('POST', '/scan/list', { url: wizardData.url });
+    const result = await api('POST', '/scan/list', { url: firstUrl });
     wizardData.card_fields = result.fields;
     wizardData.samples = result.samples;
     wizardData.totalCards = result.totalCards;

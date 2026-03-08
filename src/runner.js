@@ -43,7 +43,17 @@ async function runJob(job) {
         const excludedSlugs = new Set(knownResult.rows.filter(r => r.status === 'excluded').map(r => r.slug));
 
         // ── Phase 1: Discover new listings (with multi-page) ────
-        const listings = await scrapeListings(job.url, knownSlugs, browser, job.max_pages || 2);
+        // Support multiple URLs (newline-separated)
+        const urls = job.url.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
+        let listings = [];
+        for (const url of urls) {
+            if (urls.length > 1) console.log(`  [URL ${urls.indexOf(url) + 1}/${urls.length}] ${url}`);
+            const results = await scrapeListings(url, knownSlugs, browser, job.max_pages || 2);
+            listings = listings.concat(results);
+        }
+        // Deduplicate by slug (in case same listing appears in multiple URLs)
+        const seen = new Set();
+        listings = listings.filter(l => { if (seen.has(l.slug)) return false; seen.add(l.slug); return true; });
         listingsFound = listings.length;
 
         for (const listing of listings) {
