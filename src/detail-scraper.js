@@ -192,6 +192,7 @@ function matchesRules(listing, rules) {
         } else {
             const fieldMap = {
                 size_perches: 'sizePerches', price_value: 'priceValue',
+                total_price: 'totalPrice', price_per_perch: 'pricePerPerch',
                 title: 'title', location: 'location',
                 is_member: 'isMember', price_type: 'priceType',
             };

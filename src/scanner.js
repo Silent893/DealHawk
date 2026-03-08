@@ -67,14 +67,35 @@ async function scanListPage(url) {
                 const descText = descEl ? descEl.textContent.trim() : '';
                 const locMatch = descText.match(/^(.+?),/);
 
+                const priceVal = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, '')) : null;
+                const priceType = priceTypeMatch ? (priceTypeMatch[1].toLowerCase().includes('per') ? 'per_perch' : 'total') : null;
+                const sizeVal = sizeMatch ? parseFloat(sizeMatch[1].replace(',', '')) : null;
+
+                // Compute normalized prices
+                let totalPrice = null;
+                let pricePerPerch = null;
+                if (priceVal) {
+                    if (priceType === 'per_perch') {
+                        pricePerPerch = priceVal;
+                        totalPrice = sizeVal ? priceVal * sizeVal : null;
+                    } else if (priceType === 'total') {
+                        totalPrice = priceVal;
+                        pricePerPerch = sizeVal ? priceVal / sizeVal : null;
+                    } else {
+                        totalPrice = priceVal;
+                    }
+                }
+
                 samples.push({
                     slug,
                     title: titleEl ? titleEl.textContent.trim() : '',
                     size_text: sizeText,
-                    size_perches: sizeMatch ? parseFloat(sizeMatch[1].replace(',', '')) : null,
+                    size_perches: sizeVal,
                     price: priceText,
-                    price_value: priceMatch ? parseFloat(priceMatch[1].replace(/,/g, '')) : null,
-                    price_type: priceTypeMatch ? (priceTypeMatch[1].toLowerCase().includes('per') ? 'per_perch' : 'total') : null,
+                    price_value: priceVal,
+                    price_type: priceType,
+                    total_price: totalPrice,
+                    price_per_perch: pricePerPerch,
                     location: locMatch ? locMatch[1].trim() : descText,
                     is_member: !!memberEl,
                     posted_text: timeEl ? timeEl.textContent.trim() : '',
@@ -88,7 +109,9 @@ async function scanListPage(url) {
                 const s = samples[0];
                 if (s.title) fields.push({ key: 'title', label: 'Title', type: 'text', sample: s.title });
                 if (s.size_perches !== null) fields.push({ key: 'size_perches', label: 'Size (perches)', type: 'number', sample: s.size_perches });
-                if (s.price_value !== null) fields.push({ key: 'price_value', label: 'Price (value)', type: 'number', sample: s.price_value });
+                if (s.price_value !== null) fields.push({ key: 'price_value', label: 'Price (raw value)', type: 'number', sample: s.price_value });
+                if (s.total_price !== null) fields.push({ key: 'total_price', label: 'Total Price', type: 'number', sample: s.total_price });
+                if (s.price_per_perch !== null) fields.push({ key: 'price_per_perch', label: 'Price per Perch', type: 'number', sample: s.price_per_perch });
                 if (s.price_type) fields.push({ key: 'price_type', label: 'Price Type', type: 'enum', sample: s.price_type, options: ['per_perch', 'total'] });
                 if (s.location) fields.push({ key: 'location', label: 'Location', type: 'text', sample: s.location });
                 fields.push({ key: 'is_member', label: 'Member', type: 'boolean', sample: s.is_member });

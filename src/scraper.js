@@ -62,16 +62,36 @@ async function scrapePage(page, url) {
             const descText = descEl ? descEl.textContent.trim() : '';
             const locMatch = descText.match(/^(.+?),/);
 
+            const priceVal = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, '')) : null;
+            const priceType = priceTypeMatch
+                ? (priceTypeMatch[1].toLowerCase().includes('per') ? 'per_perch' : 'total')
+                : null;
+            const sizeVal = sizeMatch ? parseFloat(sizeMatch[1].replace(',', '')) : null;
+
+            let totalPrice = null;
+            let pricePerPerch = null;
+            if (priceVal) {
+                if (priceType === 'per_perch') {
+                    pricePerPerch = priceVal;
+                    totalPrice = sizeVal ? priceVal * sizeVal : null;
+                } else if (priceType === 'total') {
+                    totalPrice = priceVal;
+                    pricePerPerch = sizeVal ? priceVal / sizeVal : null;
+                } else {
+                    totalPrice = priceVal;
+                }
+            }
+
             results.push({
                 slug,
                 title: titleEl ? titleEl.textContent.trim() : '',
                 price: priceText,
-                priceValue: priceMatch ? parseFloat(priceMatch[1].replace(/,/g, '')) : null,
-                priceType: priceTypeMatch
-                    ? (priceTypeMatch[1].toLowerCase().includes('per') ? 'per_perch' : 'total')
-                    : null,
+                priceValue: priceVal,
+                priceType: priceType,
+                totalPrice,
+                pricePerPerch,
                 sizeText,
-                sizePerches: sizeMatch ? parseFloat(sizeMatch[1].replace(',', '')) : null,
+                sizePerches: sizeVal,
                 location: locMatch ? locMatch[1].trim() : descText,
                 url: `https://ikman.lk${href}`,
                 isMember: !!memberEl,
