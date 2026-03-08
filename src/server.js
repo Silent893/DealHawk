@@ -421,6 +421,7 @@ app.get('/api/listings', async (req, res) => {
             `SELECT l.*, j.name as job_name,
               (SELECT ph.price_value FROM price_history ph
                WHERE ph.listing_id = l.id ORDER BY ph.recorded_at DESC LIMIT 1 OFFSET 1) AS prev_price,
+              (SELECT COUNT(*) - 1 FROM price_history ph WHERE ph.listing_id = l.id) AS price_changes,
               (SELECT AVG(l2.price_value) FROM listings l2
                WHERE l2.job_id = l.job_id AND l2.price_value IS NOT NULL AND l2.status = 'active') AS job_avg_price
              FROM listings l

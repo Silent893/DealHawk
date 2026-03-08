@@ -16,17 +16,21 @@ const WIZARD_STEPS = [
 
 /* ─── Navigation ───────────────────────────────────────────── */
 document.querySelectorAll('.nav-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    currentView = btn.dataset.view;
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById(`${currentView}-view`).classList.add('active');
-    if (currentView === 'jobs') loadJobs();
-    if (currentView === 'listings') loadListings();
-    if (currentView === 'runs') loadRuns();
-  });
+  btn.addEventListener('click', () => showView(btn.dataset.view));
 });
+
+function showView(view) {
+  currentView = view;
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const navBtn = document.querySelector(`.nav-btn[data-view="${view}"]`);
+  if (navBtn) navBtn.classList.add('active');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const el = document.getElementById(`${view}-view`);
+  if (el) el.classList.add('active');
+  if (view === 'jobs') loadJobs();
+  if (view === 'listings') loadListings();
+  if (view === 'runs') loadRuns();
+}
 
 document.getElementById('new-job-btn').addEventListener('click', openWizard);
 
@@ -88,14 +92,15 @@ async function loadJobs() {
   empty.style.display = 'none';
 
   grid.innerHTML = jobs.map(j => `
-    <div class="job-card">
+    <div class="job-card" style="cursor:pointer" onclick="openJobDetail(${j.id}, '${esc(j.name)}')"
+      >
       <div class="job-card-header">
         <span class="job-card-title">${esc(j.name)}</span>
         <span class="job-card-badge ${j.active ? 'badge-active' : 'badge-paused'}">
           ${j.active ? 'Active' : 'Paused'}
         </span>
       </div>
-      <div class="job-card-url">${esc(j.url)}</div>
+      <div class="job-card-url" style="font-size:0.72rem;max-height:36px;overflow:hidden">${esc(j.url.split('\n')[0])}${j.url.includes('\n') ? ' (+' + (j.url.split('\n').length - 1) + ' more)' : ''}</div>
       <div class="job-card-stats">
         <div class="stat">
           <div class="stat-value">${j.active_count || 0}</div>
@@ -794,6 +799,232 @@ async function showPriceChart(listingId, title) {
       <span style="color:var(--text-muted);margin-left:8px">${prices.length} data points</span>
     </div>
   `;
+}
+
+/* ─── Job Detail Page ─────────────────────────────────────── */
+let currentJobId = null;
+let priceChart = null;
+
+function openJobDetail(id, name) {
+  currentJobId = id;
+  document.getElementById('job-detail-title').textContent = name;
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('job-detail-view').classList.add('active');
+  currentView = 'job-detail';
+  loadJobDetail(id);
+}
+
+async function loadJobDetail(id) {
+  try {
+    const [analytics, history, listingsResp] = await Promise.all([
+      api('GET', `/jobs/${id}/analytics`),
+      api('GET', `/jobs/${id}/price-history`),
+      api('GET', `/listings?job_id=${id}&matched_only=true&limit=100`),
+    ]);
+
+    renderJobStats(analytics);
+    renderPriceChart(history);
+
+    // Populate group-by dropdown
+    const select = document.getElementById('group-by-select');
+    select.innerHTML = '<option value="">None</option>' +
+      analytics.availableGroupFields.map(f => `<option value="${f}">${f}</option>`).join('');
+
+    document.getElementById('job-groups-grid').innerHTML = '';
+
+    // Render listings with age
+    renderJobListings(listingsResp.listings || listingsResp);
+  } catch (err) {
+    console.error('Failed to load job detail:', err);
+  }
+}
+
+function formatPrice(val) {
+  if (!val) return '—';
+  if (val >= 1000000) return 'Rs ' + (val / 1000000).toFixed(1) + 'M';
+  if (val >= 1000) return 'Rs ' + (val / 1000).toFixed(0) + 'K';
+  return 'Rs ' + val.toLocaleString();
+}
+
+function renderJobStats(a) {
+  const trendArrow = a.price.trendPct !== null
+    ? (a.price.trendPct < 0 ? `🔻 ${a.price.trendPct}%` : `🔺 +${a.price.trendPct}%`)
+    : '—';
+  const demandIcons = { hot: '🔥 Hot', warm: '🌡️ Warm', cool: '❄️ Cool', unknown: '❓' };
+
+  document.getElementById('job-stats-bar').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-card-value">${formatPrice(a.price.avg)}</div>
+      <div class="stat-card-label">Avg Price</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${trendArrow} (7d)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value">${formatPrice(a.price.min)} – ${formatPrice(a.price.max)}</div>
+      <div class="stat-card-label">Price Range</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">Median: ${formatPrice(a.price.median)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value">${demandIcons[a.timeToSell.demandLevel]}</div>
+      <div class="stat-card-label">Demand</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">Avg sell: ${a.timeToSell.avgDays || '?'} days</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value">${a.price.matchedCount}</div>
+      <div class="stat-card-label">Matched</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${a.priceDrops.count} price drops</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value">+${a.ratio.new7d} / -${a.ratio.sold7d}</div>
+      <div class="stat-card-label">New / Sold (7d)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-value">${a.age.avgDays || '?'}d</div>
+      <div class="stat-card-label">Avg Listing Age</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${a.age.postedToday} new today</div>
+    </div>
+  `;
+}
+
+function renderPriceChart(history) {
+  const ctx = document.getElementById('price-history-chart');
+  if (priceChart) { priceChart.destroy(); priceChart = null; }
+  if (!history || history.length === 0) {
+    ctx.parentElement.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:40px 0">No price history yet — run the job to collect data.</p>';
+    return;
+  }
+
+  const labels = history.map(h => new Date(h.day).toLocaleDateString());
+  const data = history.map(h => parseFloat(h.avg_price));
+
+  priceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Avg Price',
+        data,
+        borderColor: '#6366f1',
+        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => formatPrice(ctx.parsed.y)
+          }
+        }
+      },
+      scales: {
+        y: {
+          ticks: {
+            callback: val => formatPrice(val),
+            color: '#94a3b8',
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        x: {
+          ticks: { color: '#94a3b8', maxTicksLimit: 10 },
+          grid: { display: false },
+        },
+      },
+    },
+  });
+}
+
+async function loadJobGroups() {
+  const field = document.getElementById('group-by-select').value;
+  if (!field || !currentJobId) {
+    document.getElementById('job-groups-grid').innerHTML = '';
+    return;
+  }
+  const groups = await api('GET', `/jobs/${currentJobId}/groups?field=${encodeURIComponent(field)}`);
+  renderJobGroups(groups, field);
+}
+
+function renderJobGroups(groups, field) {
+  document.getElementById('job-groups-grid').innerHTML = groups.map(g => `
+    <div class="job-card" style="padding:14px">
+      <div class="job-card-header">
+        <span class="job-card-title" style="font-size:0.95rem">${esc(g.group_key || 'Unknown')}</span>
+        <span class="job-card-badge badge-active">${g.count} listings</span>
+      </div>
+      <div class="job-card-stats" style="margin-top:8px">
+        <div class="stat">
+          <div class="stat-value">${formatPrice(parseFloat(g.avg_price))}</div>
+          <div class="stat-label">Avg</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatPrice(parseFloat(g.min_price))}</div>
+          <div class="stat-label">Min</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatPrice(parseFloat(g.max_price))}</div>
+          <div class="stat-label">Max</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderJobListings(listings) {
+  const grid = document.getElementById('job-listings-grid');
+  if (!listings || listings.length === 0) {
+    grid.innerHTML = '<p style="color:var(--text-muted)">No matched listings yet.</p>';
+    return;
+  }
+
+  grid.innerHTML = listings.map(l => {
+    const statusClass = l.status === 'sold' ? 'badge-danger' : l.status === 'excluded' ? 'badge-warning' : 'badge-active';
+    const statusLabel = l.status === 'sold' ? '🔴 Sold' : l.status === 'excluded' ? '⛔ Excluded' : '🟢 Active';
+    const priceChange = l.price_changes > 0 ? ` (${l.price_changes} changes)` : '';
+
+    // Listing age
+    let ageText = '';
+    if (l.posted_at) {
+      const days = Math.floor((Date.now() - new Date(l.posted_at).getTime()) / 86400000);
+      if (days === 0) ageText = '🆕 Today';
+      else if (days === 1) ageText = '1 day ago';
+      else if (days < 7) ageText = `${days} days ago`;
+      else if (days < 30) ageText = `${Math.floor(days / 7)}w ago`;
+      else ageText = `${Math.floor(days / 30)}mo ago`;
+    }
+
+    // Price drop velocity
+    let dropBadge = '';
+    if (l.price_changes >= 3) dropBadge = '<span style="color:var(--success);font-size:0.72rem;margin-left:4px">🔻🔻🔻 Motivated seller</span>';
+    else if (l.price_changes >= 2) dropBadge = '<span style="color:var(--warning);font-size:0.72rem;margin-left:4px">🔻🔻</span>';
+
+    const detailHtml = l.detail_fields && typeof l.detail_fields === 'object'
+      ? Object.entries(l.detail_fields).slice(0, 4).map(([k, v]) =>
+        `<div class="listing-card-detail-row"><span class="listing-card-detail-key">${esc(k)}</span><span>${esc(String(v))}</span></div>`
+      ).join('')
+      : '';
+
+    return `
+      <div class="listing-card ${l.matched_log ? '' : 'listing-unmatched'}">
+        ${l.image_path ? `<img src="/api/images/${l.image_path}" class="listing-card-img" loading="lazy">` : ''}
+        <div class="listing-card-body">
+          <a class="listing-card-title" href="${l.url}" target="_blank">${esc(l.title || l.slug)}</a>
+          <div class="listing-card-price">${esc(l.price || '')}${priceChange}${dropBadge}</div>
+          ${l.sub_location ? `<div style="font-size:0.75rem;color:var(--text-muted)">📍 ${esc(l.sub_location)}${l.location ? ', ' + esc(l.location) : ''}</div>` : ''}
+          ${ageText ? `<div style="font-size:0.72rem;color:var(--text-muted)">🕐 Posted ${ageText}</div>` : ''}
+          ${detailHtml}
+        </div>
+        <div class="listing-card-footer">
+          <span class="${statusClass}">${statusLabel}</span>
+          <button class="btn btn-sm btn-ghost" onclick="toggleMatch(${l.id})" title="${l.matched_log ? 'Unmatch' : 'Match'}">${l.matched_log ? '⭐' : '☆'}</button>
+          ${l.status !== 'excluded' ? `<button class="btn btn-sm btn-ghost" onclick="excludeListing(${l.id})" title="Exclude">⛔</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
 }
 
 /* ─── Init ─────────────────────────────────────────────────── */

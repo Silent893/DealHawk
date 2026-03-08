@@ -7,6 +7,7 @@
   <title>DealHawk</title>
   <link rel="stylesheet" href="/style.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 
 <body>
@@ -69,6 +70,28 @@
       <!-- Runs View -->
       <section class="view" id="runs-view">
         <div class="runs-table-wrap" id="runs-table-wrap"></div>
+      </section>
+
+      <!-- Job Detail View -->
+      <section class="view" id="job-detail-view">
+        <div style="margin-bottom:16px">
+          <button class="btn btn-ghost" onclick="showView('jobs')" style="font-size:0.85rem">← Back to Jobs</button>
+          <h2 id="job-detail-title" style="display:inline;margin-left:12px;font-size:1.3rem"></h2>
+        </div>
+        <div class="stats-overview" id="job-stats-bar" style="margin-bottom:20px"></div>
+        <div style="display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap">
+          <div style="flex:1;min-width:300px">
+            <canvas id="price-history-chart" height="200"></canvas>
+          </div>
+        </div>
+        <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+          <label style="font-size:0.85rem;color:var(--text-secondary)">Group by:</label>
+          <select id="group-by-select" class="form-select" style="max-width:200px" onchange="loadJobGroups()"></select>
+        </div>
+        <div id="job-groups-grid" class="jobs-grid" style="margin-bottom:20px"></div>
+        <h3 style="margin-bottom:12px;font-size:1rem">Matched Listings</h3>
+        <div class="listings-grid" id="job-listings-grid"></div>
+        <div class="pagination" id="job-listings-pagination"></div>
       </section>
     </main>
 
