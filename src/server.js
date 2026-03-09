@@ -297,6 +297,45 @@ app.get('/api/jobs/:id/supply-trend', async (req, res) => {
     }
 });
 
+app.get('/api/jobs/:id/sell-through', async (req, res) => {
+    const jobId = req.params.id;
+    try {
+        const result = await db.query(`
+            WITH weeks AS (
+                SELECT
+                    DATE_TRUNC('week', d)::date AS week
+                FROM generate_series(
+                    (SELECT MIN(first_seen_at) FROM listings WHERE job_id = $1),
+                    NOW(),
+                    '1 week'::interval
+                ) d
+            )
+            SELECT
+                w.week::text AS week,
+                COALESCE(
+                    COUNT(*) FILTER (WHERE l.sold_at IS NOT NULL AND DATE_TRUNC('week', l.sold_at)::date = w.week)
+                , 0) AS sold,
+                COALESCE(
+                    COUNT(*) FILTER (WHERE l.first_seen_at <= w.week + INTERVAL '7 days' AND (l.sold_at IS NULL OR l.sold_at >= w.week))
+                , 0) AS active,
+                CASE WHEN COUNT(*) FILTER (WHERE l.first_seen_at <= w.week + INTERVAL '7 days' AND (l.sold_at IS NULL OR l.sold_at >= w.week)) > 0
+                    THEN ROUND(
+                        COUNT(*) FILTER (WHERE l.sold_at IS NOT NULL AND DATE_TRUNC('week', l.sold_at)::date = w.week)::numeric /
+                        COUNT(*) FILTER (WHERE l.first_seen_at <= w.week + INTERVAL '7 days' AND (l.sold_at IS NULL OR l.sold_at >= w.week))::numeric * 100
+                    , 1)
+                    ELSE 0
+                END AS rate
+            FROM weeks w
+            LEFT JOIN listings l ON l.job_id = $1 AND l.matched_log = true
+            GROUP BY w.week
+            ORDER BY w.week
+        `, [jobId]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/jobs/:id/groups', async (req, res) => {
     const jobId = req.params.id;
     const field = req.query.field;

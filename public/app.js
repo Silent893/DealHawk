@@ -1166,7 +1166,13 @@ let daysOnMarketChart = null;
 async function renderDistributionCharts(listings, jobId) {
   renderPriceDistribution(listings);
   renderDaysOnMarket(listings);
+  renderPriceByArea(listings);
+  renderPriceVsSize(listings);
+  renderTimeToSell(listings);
+  renderSellerActivity(listings);
+  populateCompareSelector(listings);
   await renderSupplyTrend(jobId);
+  await renderSellThrough(jobId);
 }
 
 function renderPriceDistribution(listings) {
@@ -1295,6 +1301,263 @@ function renderDaysOnMarket(listings) {
       scales: {
         y: { ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } },
         x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+/* ─── New Charts ───────────────────────────────────────────── */
+let priceByAreaChart = null;
+let priceVsSizeChart = null;
+let timeToSellChart = null;
+let sellThroughChart = null;
+let compareChart = null;
+
+// 7a. Price by Area (horizontal bar)
+function renderPriceByArea(listings) {
+  const ctx = document.getElementById('price-by-area-chart');
+  if (priceByAreaChart) { priceByAreaChart.destroy(); priceByAreaChart = null; }
+
+  const showPP = window._isLandMode && !window._priceViewTotal;
+  const getP = l => showPP ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+  const active = listings.filter(l => l.status === 'active' && l.sub_location && getP(l) > 0);
+  if (active.length < 2) return;
+
+  const areaMap = {};
+  active.forEach(l => {
+    const a = l.sub_location;
+    if (!areaMap[a]) areaMap[a] = [];
+    areaMap[a].push(getP(l));
+  });
+
+  const sorted = Object.entries(areaMap)
+    .map(([area, prices]) => ({ area, avg: prices.reduce((a, b) => a + b, 0) / prices.length, count: prices.length }))
+    .filter(a => a.count >= 2)
+    .sort((a, b) => a.avg - b.avg);
+  if (sorted.length === 0) return;
+
+  priceByAreaChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => `${s.area} (${s.count})`),
+      datasets: [{
+        label: showPP ? 'Avg Rs/perch' : 'Avg Price',
+        data: sorted.map(s => Math.round(s.avg)),
+        backgroundColor: 'rgba(99, 102, 241, 0.6)',
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => formatPrice(c.parsed.x) } } },
+      scales: {
+        x: { ticks: { callback: v => formatPrice(v), color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+// 7b. Time-to-Sell Histogram
+function renderTimeToSell(listings) {
+  const ctx = document.getElementById('time-to-sell-chart');
+  if (timeToSellChart) { timeToSellChart.destroy(); timeToSellChart = null; }
+
+  const sold = listings.filter(l => l.status === 'sold' && l.posted_at && l.sold_at);
+  if (sold.length < 3) return;
+
+  const buckets = { '0-3d': 0, '4-7d': 0, '1-2w': 0, '2-4w': 0, '1-2m': 0, '2m+': 0 };
+  sold.forEach(l => {
+    const days = Math.floor((new Date(l.sold_at) - new Date(l.posted_at)) / 86400000);
+    if (days <= 3) buckets['0-3d']++;
+    else if (days <= 7) buckets['4-7d']++;
+    else if (days <= 14) buckets['1-2w']++;
+    else if (days <= 28) buckets['2-4w']++;
+    else if (days <= 60) buckets['1-2m']++;
+    else buckets['2m+']++;
+  });
+
+  timeToSellChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: Object.keys(buckets),
+      datasets: [{
+        label: 'Sold',
+        data: Object.values(buckets),
+        backgroundColor: ['#22c55e', '#34d399', '#6366f1', '#818cf8', '#f59e0b', '#ef4444'],
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+// 7c. Sell-Through Rate (line from API)
+async function renderSellThrough(jobId) {
+  const ctx = document.getElementById('sell-through-chart');
+  if (sellThroughChart) { sellThroughChart.destroy(); sellThroughChart = null; }
+  try {
+    const data = await api('GET', `/jobs/${jobId}/sell-through`);
+    if (!data || data.length < 2) return;
+
+    sellThroughChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: data.map(d => d.week),
+        datasets: [{
+          label: 'Sell-Through %',
+          data: data.map(d => d.rate),
+          borderColor: '#f59e0b',
+          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+          fill: true, tension: 0.3, pointRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.parsed.y.toFixed(1) + '%' } } },
+        scales: {
+          y: { ticks: { callback: v => v + '%', color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          x: { ticks: { color: '#94a3b8', maxTicksLimit: 8 }, grid: { display: false } },
+        },
+      },
+    });
+  } catch (_) { /* no data */ }
+}
+
+// 7d. Seller Activity Table
+function renderSellerActivity(listings) {
+  const wrap = document.getElementById('seller-activity-table');
+  const sellers = {};
+  listings.forEach(l => {
+    const name = l.seller_name || 'Unknown';
+    if (!sellers[name]) sellers[name] = { count: 0, prices: [], sold: 0, member: false };
+    sellers[name].count++;
+    if (l.price_value) sellers[name].prices.push(parseFloat(l.price_value));
+    if (l.status === 'sold') sellers[name].sold++;
+    if (l.is_member) sellers[name].member = true;
+  });
+
+  const sorted = Object.entries(sellers)
+    .map(([name, s]) => ({ name, ...s, avg: s.prices.length ? s.prices.reduce((a, b) => a + b, 0) / s.prices.length : 0 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15);
+
+  if (sorted.length === 0) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `
+    <table class="runs-table" style="font-size:0.82rem">
+      <thead><tr><th>Seller</th><th>Listings</th><th>Avg Price</th><th>Sold</th><th>Type</th></tr></thead>
+      <tbody>
+        ${sorted.map(s => `<tr>
+          <td>${esc(s.name)}</td>
+          <td>${s.count}</td>
+          <td>${formatPrice(s.avg)}</td>
+          <td style="color:${s.sold > 0 ? 'var(--danger)' : 'var(--text-muted)'}">${s.sold}</td>
+          <td>${s.member ? '⭐ Member' : ''}${s.count >= 5 ? ' 🏪 Dealer' : ''}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// 7e. Price vs Size Scatter (land mode)
+function renderPriceVsSize(listings) {
+  const ctx = document.getElementById('price-vs-size-chart');
+  if (priceVsSizeChart) { priceVsSizeChart.destroy(); priceVsSizeChart = null; }
+  if (!window._isLandMode) {
+    document.getElementById('scatter-chart-wrap').style.display = 'none';
+    return;
+  }
+  document.getElementById('scatter-chart-wrap').style.display = '';
+
+  const points = listings.filter(l => l.size_perches && l.price_per_perch && l.status === 'active')
+    .map(l => ({ x: parseFloat(l.size_perches), y: parseFloat(l.price_per_perch), title: l.title }));
+  if (points.length < 3) return;
+
+  const soldPts = listings.filter(l => l.size_perches && l.price_per_perch && l.status === 'sold')
+    .map(l => ({ x: parseFloat(l.size_perches), y: parseFloat(l.price_per_perch) }));
+
+  priceVsSizeChart = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: 'Active', data: points, backgroundColor: 'rgba(34, 197, 94, 0.7)', pointRadius: 5 },
+        { label: 'Sold', data: soldPts, backgroundColor: 'rgba(239, 68, 68, 0.5)', pointRadius: 4 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+        tooltip: { callbacks: { label: c => `${c.parsed.x}p → Rs ${Number(c.parsed.y).toLocaleString()}/perch` } },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Perches', color: '#94a3b8' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { title: { display: true, text: 'Rs/perch', color: '#94a3b8' }, ticks: { callback: v => formatPrice(v), color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      },
+    },
+  });
+}
+
+// 7f. Compare Price History (multi-line)
+function populateCompareSelector(listings) {
+  const sel = document.getElementById('compare-listing-select');
+  if (!sel) return;
+  const withHistory = listings.filter(l => parseInt(l.price_changes) > 0);
+  sel.innerHTML = withHistory.map(l =>
+    `<option value="${l.id}">${esc((l.title || l.slug).substring(0, 40))} (${parseInt(l.price_changes) || 0} changes)</option>`
+  ).join('');
+}
+
+async function renderCompareChart() {
+  const sel = document.getElementById('compare-listing-select');
+  const ids = [...sel.selectedOptions].map(o => o.value).slice(0, 5);
+  if (ids.length < 1) { alert('Select 1-5 listings to compare'); return; }
+
+  const ctx = document.getElementById('compare-price-chart');
+  if (compareChart) { compareChart.destroy(); compareChart = null; }
+
+  const colors = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#ec4899'];
+  const datasets = [];
+
+  for (let i = 0; i < ids.length; i++) {
+    try {
+      const prices = await api('GET', `/listings/${ids[i]}/prices`);
+      const label = [...sel.selectedOptions].find(o => o.value === ids[i])?.text || `#${ids[i]}`;
+      datasets.push({
+        label: label.substring(0, 30),
+        data: prices.map(p => ({ x: new Date(p.recorded_at).toLocaleDateString(), y: parseFloat(p.price_value) })),
+        borderColor: colors[i],
+        tension: 0.3,
+        pointRadius: 3,
+        fill: false,
+      });
+    } catch (_) { /* skip */ }
+  }
+
+  // Merge all labels
+  const allLabels = [...new Set(datasets.flatMap(d => d.data.map(p => p.x)))].sort((a, b) => new Date(a) - new Date(b));
+  datasets.forEach(ds => {
+    const dataMap = Object.fromEntries(ds.data.map(p => [p.x, p.y]));
+    ds.data = allLabels.map(l => dataMap[l] ?? null);
+  });
+
+  compareChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: allLabels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, spanGaps: true,
+      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } }, tooltip: { callbacks: { label: c => formatPrice(c.parsed.y) } } },
+      scales: {
+        y: { ticks: { callback: v => formatPrice(v), color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 }, grid: { display: false } },
       },
     },
   });

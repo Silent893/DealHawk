@@ -103,6 +103,47 @@
           </div>
         </div>
 
+        <!-- New Charts Row -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:20px">
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">📍 Avg Price by Area</h4>
+            <canvas id="price-by-area-chart" height="160"></canvas>
+          </div>
+          <div id="scatter-chart-wrap"
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">📐 Price vs Size</h4>
+            <canvas id="price-vs-size-chart" height="160"></canvas>
+          </div>
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">⏱ Time to Sell</h4>
+            <canvas id="time-to-sell-chart" height="160"></canvas>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:20px">
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">📈 Sell-Through Rate</h4>
+            <canvas id="sell-through-chart" height="160"></canvas>
+          </div>
+          <div
+            style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;grid-column:span 2">
+            <h4 style="margin:0 0 8px;font-size:0.85rem;color:var(--text-secondary)">👤 Top Sellers</h4>
+            <div id="seller-activity-table" style="max-height:300px;overflow-y:auto"></div>
+          </div>
+        </div>
+        <div
+          style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+            <h4 style="margin:0;font-size:0.85rem;color:var(--text-secondary)">📉 Compare Price History</h4>
+            <select id="compare-listing-select" multiple
+              style="min-width:200px;max-width:400px;height:60px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.8rem;padding:4px"></select>
+            <button class="btn btn-sm btn-primary" onclick="renderCompareChart()">Compare</button>
+          </div>
+          <canvas id="compare-price-chart" height="180"></canvas>
+        </div>
+
         <!-- Grouping Section -->
         <div
           style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;background:var(--card-bg)">
