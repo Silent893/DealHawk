@@ -129,10 +129,51 @@
         <!-- Group results -->
         <div id="job-groups-grid" style="margin-bottom:20px"></div>
 
+        <!-- Quick Filter Pills -->
+        <div id="filter-pills" class="filter-pills" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        </div>
+
+        <!-- Advanced Filters -->
+        <details id="advanced-filters" style="margin-bottom:12px">
+          <summary style="cursor:pointer;font-size:0.82rem;color:var(--text-secondary);margin-bottom:8px">⚙️ Advanced
+            Filters</summary>
+          <div
+            style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;padding:10px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px">
+            <div>
+              <label style="font-size:0.75rem;color:var(--text-muted);display:block">Price Min</label>
+              <input class="form-input" id="af-price-min" type="number" placeholder="Min" style="width:100px">
+            </div>
+            <div>
+              <label style="font-size:0.75rem;color:var(--text-muted);display:block">Price Max</label>
+              <input class="form-input" id="af-price-max" type="number" placeholder="Max" style="width:100px">
+            </div>
+            <div>
+              <label style="font-size:0.75rem;color:var(--text-muted);display:block">Size Min (perch)</label>
+              <input class="form-input" id="af-size-min" type="number" placeholder="Min" style="width:80px">
+            </div>
+            <div>
+              <label style="font-size:0.75rem;color:var(--text-muted);display:block">Size Max (perch)</label>
+              <input class="form-input" id="af-size-max" type="number" placeholder="Max" style="width:80px">
+            </div>
+            <div>
+              <label style="font-size:0.75rem;color:var(--text-muted);display:block">Posted After</label>
+              <input class="form-input" id="af-posted-after" type="date" style="width:130px">
+            </div>
+            <label class="checkbox-label" style="font-size:0.8rem">
+              <input type="checkbox" id="af-member-only"> Members only
+            </label>
+            <label class="checkbox-label" style="font-size:0.8rem">
+              <input type="checkbox" id="af-has-phone"> Has phone
+            </label>
+            <button class="btn btn-sm btn-primary" onclick="applyAllFilters()">Apply</button>
+            <button class="btn btn-sm btn-ghost" onclick="clearAdvancedFilters()">Clear</button>
+          </div>
+        </details>
+
         <!-- Filter bar for listings -->
         <div class="filter-bar" style="margin-bottom:12px">
           <input class="form-input" id="job-listing-search" placeholder="Search title..." style="max-width:180px"
-            onkeyup="if(event.key==='Enter')loadJobListingsFiltered()">
+            onkeyup="if(event.key==='Enter')applyAllFilters()">
           <select id="job-listing-status">
             <option value="">All Status</option>
             <option value="active" selected>🟢 Active</option>
@@ -149,7 +190,7 @@
           <label class="checkbox-label">
             <input type="checkbox" id="job-listing-matched" checked> Matched only
           </label>
-          <button class="btn btn-sm" onclick="loadJobListingsFiltered()">Apply</button>
+          <button class="btn btn-sm" onclick="applyAllFilters()">Apply</button>
         </div>
 
         <div class="listings-grid" id="job-listings-grid"></div>

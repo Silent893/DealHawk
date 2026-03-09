@@ -124,11 +124,18 @@ function renderListingCard(l) {
       : `<span class="price-drop-badge rise">+${diff}% avg</span>`;
   }
 
-  // Price changes / velocity
+  // Price drop count indicator: 🔻×N -X%
   const changes = parseInt(l.price_changes) || 0;
-  let velocityBadge = '';
-  if (changes >= 3) velocityBadge = '<span style="color:var(--success);font-size:0.72rem;margin-left:4px">🔻🔻🔻 Motivated seller</span>';
-  else if (changes >= 2) velocityBadge = '<span style="color:var(--warning);font-size:0.72rem;margin-left:4px">🔻🔻</span>';
+  let dropBadge = '';
+  if (changes > 0) {
+    // Calculate total % change from first to current price
+    const prev = parseFloat(l.prev_price);
+    const curr = parseFloat(l.price_value);
+    const pctStr = (prev && curr && prev !== curr)
+      ? ` ${((curr - prev) / prev * 100).toFixed(0)}%`
+      : '';
+    dropBadge = `<span style="background:rgba(34,197,94,0.15);color:var(--success);font-size:0.72rem;padding:2px 8px;border-radius:8px;margin-left:4px;font-weight:500">🔻×${changes}${pctStr}</span>`;
+  }
 
   // Listing age
   let ageText = '';
@@ -141,10 +148,10 @@ function renderListingCard(l) {
     else ageText = `${Math.floor(days / 30)}mo ago`;
   }
 
-  // Urgency score
-  const urgencyAvg = window._isLandMode ? parseFloat(l.job_avg_price) || 0 : parseFloat(l.job_avg_price) || 0;
-  const urgencyScore = computeUrgencyScore(l, urgencyAvg);
-  const urgencyBadge = getUrgencyBadge(urgencyScore, l);
+  // Deal score
+  const dealAvg = parseFloat(l.job_avg_price) || 0;
+  const dealScore = computeDealScore(l, dealAvg);
+  const dealBadge = getDealBadge(dealScore);
 
   // Price display — land mode shows per-perch prominent + total small (or vice versa when toggled)
   let priceDisplay = esc(l.price || '');
@@ -170,7 +177,7 @@ function renderListingCard(l) {
           <a href="${l.url}" target="_blank" style="color:inherit;text-decoration:none">${esc(l.title || l.slug)}</a>
         </div>
         <div class="listing-card-price">
-          ${priceDisplay} ${priceCompHtml} ${velocityBadge} ${urgencyBadge}
+          ${priceDisplay} ${priceCompHtml} ${dropBadge} ${dealBadge}
         </div>
         ${l.sub_location ? `<div style="font-size:0.75rem;color:var(--text-muted)">📍 ${esc(l.sub_location)}${l.location ? ', ' + esc(l.location) : ''}</div>` : ''}
         ${ageText ? `<div style="font-size:0.72rem;color:var(--text-muted)">🕐 Posted ${ageText}</div>` : ''}
@@ -1293,30 +1300,44 @@ function renderDaysOnMarket(listings) {
   });
 }
 
-/* ─── Seller Urgency Score ────────────────────────────────── */
-function computeUrgencyScore(listing, avgPrice) {
+/* ─── Deal Quality Score ──────────────────────────────────── */
+function computeDealScore(listing, avgPrice) {
   let score = 0;
-  // Price drops weigh heavily
   const changes = parseInt(listing.price_changes) || 0;
-  score += changes * 3;
-  // Days listed
-  if (listing.posted_at) {
+
+  // +5 per actual price drop
+  score += changes * 5;
+
+  // % below average
+  const showPP = window._isLandMode && !window._priceViewTotal;
+  const price = showPP ? parseFloat(listing.price_per_perch || listing.price_value) : parseFloat(listing.price_value);
+  if (avgPrice && price) {
+    const pctBelow = ((avgPrice - price) / avgPrice) * 100;
+    if (pctBelow > 0) score += Math.floor(pctBelow / 5); // +1 per 5% below avg
+    if (pctBelow < -30) score -= 3; // extremely overpriced penalty
+  }
+
+  // Listed >14 days with drops = struggling seller
+  if (listing.posted_at && changes > 0) {
     const days = Math.floor((Date.now() - new Date(listing.posted_at).getTime()) / 86400000);
-    score += Math.min(days / 7, 4); // cap at ~4
+    if (days > 14) score += 2;
   }
-  // Below average
-  if (avgPrice && listing.price_value) {
-    const pct = ((avgPrice - parseFloat(listing.price_value)) / avgPrice) * 100;
-    if (pct > 0) score += pct / 10;
+
+  // Listed >30 days WITHOUT drops = stale, penalize
+  if (listing.posted_at && changes === 0) {
+    const days = Math.floor((Date.now() - new Date(listing.posted_at).getTime()) / 86400000);
+    if (days > 30) score -= 2;
   }
-  return Math.round(score * 10) / 10;
+
+  // Member seller bonus
+  if (listing.is_member) score += 1;
+
+  return Math.max(0, Math.round(score * 10) / 10);
 }
 
-function getUrgencyBadge(score, listing) {
-  const drops = parseInt(listing?.price_changes) || 0;
-  if (score >= 8 && drops >= 2) return '<span style="background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">🔥 Very Urgent</span>';
-  if (score >= 5 && drops >= 1) return '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">⚡ Urgent</span>';
-  if (score >= 3 && drops >= 1) return '<span style="background:rgba(99,102,241,0.15);color:#818cf8;font-size:0.7rem;padding:2px 6px;border-radius:8px;margin-left:4px">📊 Motivated</span>';
+function getDealBadge(score) {
+  if (score >= 15) return '<span style="background:rgba(239,68,68,0.15);color:#ef4444;font-size:0.72rem;padding:2px 8px;border-radius:8px;margin-left:4px;font-weight:500">🔥 Hot Deal</span>';
+  if (score >= 10) return '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;font-size:0.72rem;padding:2px 8px;border-radius:8px;margin-left:4px;font-weight:500">⚡ Good Deal</span>';
   return '';
 }
 
@@ -1519,6 +1540,8 @@ async function applyCustomGroups() {
 
 /* ─── Job Detail Filtered Listings ────────────────────────── */
 let jobListingPage = 0;
+let activePills = new Set();
+let cachedJobListings = [];  // cached full listing set for client-side filtering
 
 async function loadJobListingsFiltered() {
   if (!currentJobId) return;
@@ -1529,8 +1552,8 @@ async function loadJobListingsFiltered() {
 
   const params = new URLSearchParams({
     job_id: currentJobId,
-    limit: 50,
-    offset: jobListingPage * 50,
+    limit: 500,
+    offset: 0,
   });
   if (search) params.set('search', search);
   if (status) params.set('status', status);
@@ -1538,18 +1561,165 @@ async function loadJobListingsFiltered() {
   if (matchedOnly) params.set('matched_only', 'true');
 
   const data = await api('GET', `/listings?${params}`);
-  const listings = data.listings || data;
-  renderJobListings(listings);
+  cachedJobListings = data.listings || data;
+  renderFilterPills(cachedJobListings);
+  applyClientFilters();
+}
 
-  // Pagination
-  if (data.total) {
-    const totalPages = Math.ceil(data.total / 50);
-    document.getElementById('job-listings-pagination').innerHTML = `
-      <button class="btn btn-sm btn-ghost" onclick="jobListingPage=Math.max(0,jobListingPage-1);loadJobListingsFiltered()" ${jobListingPage === 0 ? 'disabled' : ''}>← Prev</button>
-      <span>Page ${jobListingPage + 1} of ${totalPages}</span>
-      <button class="btn btn-sm btn-ghost" onclick="jobListingPage++;loadJobListingsFiltered()" ${jobListingPage >= totalPages - 1 ? 'disabled' : ''}>Next →</button>
-    `;
+function applyAllFilters() {
+  jobListingPage = 0;
+  loadJobListingsFiltered();
+}
+
+function togglePill(name) {
+  if (activePills.has(name)) activePills.delete(name);
+  else activePills.add(name);
+  jobListingPage = 0;
+  renderFilterPills(cachedJobListings);
+  applyClientFilters();
+}
+
+function setAreaPill(value) {
+  if (value) {
+    activePills.add('area:' + value);
+    // Remove other area pills
+    for (const p of activePills) {
+      if (p.startsWith('area:') && p !== 'area:' + value) activePills.delete(p);
+    }
+  } else {
+    for (const p of activePills) {
+      if (p.startsWith('area:')) activePills.delete(p);
+    }
   }
+  jobListingPage = 0;
+  renderFilterPills(cachedJobListings);
+  applyClientFilters();
+}
+
+function renderFilterPills(listings) {
+  const container = document.getElementById('filter-pills');
+  if (!listings || listings.length === 0) { container.innerHTML = ''; return; }
+
+  const now = Date.now();
+  const avgPrice = window._originalJobAnalytics?.price?.avg || 0;
+  const showPP = window._isLandMode && !window._priceViewTotal;
+
+  // Count matches for each pill
+  const newToday = listings.filter(l => {
+    const d = l.posted_at || l.first_seen_at;
+    return d && (now - new Date(d).getTime()) < 86400000;
+  }).length;
+
+  const priceDrops = listings.filter(l => parseInt(l.price_changes) > 0).length;
+
+  const belowAvg = avgPrice ? listings.filter(l => {
+    const p = showPP ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+    return p && p < avgPrice;
+  }).length : 0;
+
+  const hotDeals = listings.filter(l => computeDealScore(l, avgPrice) >= 15).length;
+
+  // Unique areas
+  const areas = [...new Set(listings.map(l => l.sub_location).filter(Boolean))].sort();
+  const currentArea = [...activePills].find(p => p.startsWith('area:'))?.replace('area:', '') || '';
+
+  const pill = (name, icon, label, count) => {
+    const isActive = activePills.has(name);
+    return `<button class="filter-pill ${isActive ? 'active' : ''}" onclick="togglePill('${name}')">${icon} ${label}<span class="filter-pill-count">(${count})</span></button>`;
+  };
+
+  let html = '';
+  html += pill('new_today', '🆕', 'New Today', newToday);
+  html += pill('price_drops', '🔻', 'Price Drops', priceDrops);
+  if (avgPrice) html += pill('below_avg', '💰', 'Below Avg', belowAvg);
+  html += pill('hot_deals', '🔥', 'Hot Deals', hotDeals);
+
+  if (areas.length > 0) {
+    html += `<select class="filter-pill" style="appearance:auto;padding-right:20px" onchange="setAreaPill(this.value)">
+      <option value="">📍 Area</option>
+      ${areas.map(a => `<option value="${esc(a)}" ${a === currentArea ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+    </select>`;
+  }
+
+  if (activePills.size > 0) {
+    html += `<button class="filter-pill" onclick="activePills.clear();renderFilterPills(cachedJobListings);applyClientFilters()" style="color:var(--danger);border-color:var(--danger)">✕ Clear</button>`;
+  }
+
+  container.innerHTML = html;
+}
+
+function applyClientFilters() {
+  let filtered = [...cachedJobListings];
+  const now = Date.now();
+  const avgPrice = window._originalJobAnalytics?.price?.avg || 0;
+  const showPP = window._isLandMode && !window._priceViewTotal;
+  const getPrice = l => showPP ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
+
+  // Apply pill filters (AND logic)
+  if (activePills.has('new_today')) {
+    filtered = filtered.filter(l => {
+      const d = l.posted_at || l.first_seen_at;
+      return d && (now - new Date(d).getTime()) < 86400000;
+    });
+  }
+  if (activePills.has('price_drops')) {
+    filtered = filtered.filter(l => parseInt(l.price_changes) > 0);
+  }
+  if (activePills.has('below_avg') && avgPrice) {
+    filtered = filtered.filter(l => getPrice(l) && getPrice(l) < avgPrice);
+  }
+  if (activePills.has('hot_deals')) {
+    filtered = filtered.filter(l => computeDealScore(l, avgPrice) >= 15);
+  }
+  // Area pill
+  const areaPill = [...activePills].find(p => p.startsWith('area:'));
+  if (areaPill) {
+    const area = areaPill.replace('area:', '');
+    filtered = filtered.filter(l => l.sub_location === area);
+  }
+
+  // Apply advanced filters
+  const priceMin = parseFloat(document.getElementById('af-price-min')?.value);
+  const priceMax = parseFloat(document.getElementById('af-price-max')?.value);
+  const sizeMin = parseFloat(document.getElementById('af-size-min')?.value);
+  const sizeMax = parseFloat(document.getElementById('af-size-max')?.value);
+  const postedAfter = document.getElementById('af-posted-after')?.value;
+  const memberOnly = document.getElementById('af-member-only')?.checked;
+  const hasPhone = document.getElementById('af-has-phone')?.checked;
+
+  if (priceMin) filtered = filtered.filter(l => getPrice(l) >= priceMin);
+  if (priceMax) filtered = filtered.filter(l => getPrice(l) && getPrice(l) <= priceMax);
+  if (sizeMin) filtered = filtered.filter(l => parseFloat(l.size_perches) >= sizeMin);
+  if (sizeMax) filtered = filtered.filter(l => parseFloat(l.size_perches) && parseFloat(l.size_perches) <= sizeMax);
+  if (postedAfter) filtered = filtered.filter(l => l.posted_at && new Date(l.posted_at) >= new Date(postedAfter));
+  if (memberOnly) filtered = filtered.filter(l => l.is_member);
+  if (hasPhone) filtered = filtered.filter(l => l.phone);
+
+  // Paginate
+  const pageSize = 50;
+  const total = filtered.length;
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  jobListingPage = Math.min(jobListingPage, totalPages - 1);
+  const paged = filtered.slice(jobListingPage * pageSize, (jobListingPage + 1) * pageSize);
+
+  renderJobListings(paged);
+  document.getElementById('job-listings-pagination').innerHTML = `
+    <button class="btn btn-sm btn-ghost" onclick="jobListingPage=Math.max(0,jobListingPage-1);applyClientFilters()" ${jobListingPage === 0 ? 'disabled' : ''}>← Prev</button>
+    <span>${total} listings · Page ${jobListingPage + 1} of ${totalPages}</span>
+    <button class="btn btn-sm btn-ghost" onclick="jobListingPage++;applyClientFilters()" ${jobListingPage >= totalPages - 1 ? 'disabled' : ''}>Next →</button>
+  `;
+}
+
+function clearAdvancedFilters() {
+  ['af-price-min', 'af-price-max', 'af-size-min', 'af-size-max', 'af-posted-after'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  ['af-member-only', 'af-has-phone'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+  applyClientFilters();
 }
 
 function renderJobListings(listings) {

@@ -743,3 +743,35 @@ select.form-select,
 .empty-state p {
   margin-bottom: 16px;
 }
+
+/* ─── Filter Pills ─────────────────────────────────────────── */
+.filter-pill {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.filter-pill:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.filter-pill.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.filter-pill-count {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  margin-left: 3px;
+}
