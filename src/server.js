@@ -837,14 +837,22 @@ app.get('/api/jobs/:id/relists', async (req, res) => {
             SELECT
                 new_l.id, new_l.title, new_l.price, new_l.price_value, new_l.url,
                 new_l.relist_of, new_l.relist_confidence,
-                new_l.first_seen_at,
+                new_l.first_seen_at, new_l.location AS new_location,
+                new_l.sub_location AS new_sub_location,
+                new_l.phone AS new_phone, new_l.seller_name AS new_seller,
+                new_l.image_path AS new_image,
+                new_l.size_perches AS new_size,
                 old_l.id AS old_id, old_l.title AS old_title, old_l.price AS old_price,
                 old_l.price_value AS old_price_value, old_l.sold_at AS old_sold_at,
-                old_l.url AS old_url
+                old_l.url AS old_url, old_l.location AS old_location,
+                old_l.sub_location AS old_sub_location,
+                old_l.phone AS old_phone, old_l.seller_name AS old_seller,
+                old_l.image_path AS old_image,
+                old_l.size_perches AS old_size
             FROM listings new_l
             JOIN listings old_l ON new_l.relist_of = old_l.id
             WHERE new_l.job_id = $1
-              AND new_l.relist_confidence IN ('auto', 'suggested')
+              AND new_l.relist_confidence IN ('suggested')
             ORDER BY new_l.first_seen_at DESC
         `, [req.params.id]);
         res.json(result.rows);
@@ -901,26 +909,7 @@ app.post('/api/listings/:id/dismiss-relist', async (req, res) => {
 app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
     const jobId = req.params.id;
     try {
-        // Levenshtein similarity
-        function lev(a, b) {
-            const m = a.length, n = b.length;
-            const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-            for (let i = 0; i <= m; i++) dp[i][0] = i;
-            for (let j = 0; j <= n; j++) dp[0][j] = j;
-            for (let i = 1; i <= m; i++)
-                for (let j = 1; j <= n; j++)
-                    dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
-            return dp[m][n];
-        }
-        function sim(a, b) {
-            if (!a || !b) return 0;
-            const na = a.toLowerCase().trim(), nb = b.toLowerCase().trim();
-            if (na === nb) return 1;
-            const max = Math.max(na.length, nb.length);
-            return max === 0 ? 1 : 1 - lev(na, nb) / max;
-        }
-
-        // Clear all existing auto/suggested matches for this job first
+        // Clear all existing suggested matches first
         await db.query(
             `UPDATE listings SET relist_of = NULL, relist_confidence = NULL
              WHERE job_id = $1 AND relist_confidence IN ('auto', 'suggested')`,
@@ -929,35 +918,65 @@ app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
 
         // Get active listings with phone
         const active = await db.query(
-            `SELECT id, title, phone FROM listings WHERE job_id = $1 AND status = 'active' AND phone IS NOT NULL AND phone != ''`,
+            `SELECT id, phone FROM listings WHERE job_id = $1 AND status = 'active' AND phone IS NOT NULL AND phone != ''`,
             [jobId]
         );
         // Get sold listings with phone from last 90 days
         const sold = await db.query(
-            `SELECT id, title, phone, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days' AND phone IS NOT NULL AND phone != ''`,
+            `SELECT id, phone, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days' AND phone IS NOT NULL AND phone != ''`,
             [jobId]
         );
 
+        // Build phone→sold map for O(1) lookup
+        const phoneMap = {};
+        for (const s of sold.rows) {
+            if (!phoneMap[s.phone]) phoneMap[s.phone] = [];
+            phoneMap[s.phone].push(s);
+        }
+
         let matched = 0;
         for (const act of active.rows) {
-            // Only match against sold listings with the same phone number
-            const phoneSold = sold.rows.filter(s => s.phone === act.phone);
-            if (phoneSold.length === 0) continue;
-
-            let bestMatch = null, bestSim = 0;
-            for (const s of phoneSold) {
-                const score = sim(act.title, s.title);
-                if (score > bestSim) { bestSim = score; bestMatch = s; }
-            }
-            if (bestMatch && bestSim >= 0.7) {
-                await db.query(
-                    "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
-                    [bestMatch.id, act.id]
-                );
-                matched++;
-            }
+            const candidates = phoneMap[act.phone];
+            if (!candidates || candidates.length === 0) continue;
+            // Link to the most recently sold one
+            const best = candidates.sort((a, b) => new Date(b.sold_at) - new Date(a.sold_at))[0];
+            await db.query(
+                "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
+                [best.id, act.id]
+            );
+            matched++;
         }
         res.json({ success: true, matched, scanned: active.rows.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/listings/:id/link-relist', async (req, res) => {
+    const { sold_id } = req.body;
+    if (!sold_id) return res.status(400).json({ error: 'sold_id required' });
+    try {
+        await db.query(
+            "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
+            [sold_id, req.params.id]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/jobs/:id/sold-listings', async (req, res) => {
+    try {
+        const result = await db.query(`
+            SELECT id, title, price, price_value, url, sold_at, location, sub_location,
+                   phone, seller_name, image_path, size_perches
+            FROM listings
+            WHERE job_id = $1 AND status = 'sold'
+            ORDER BY sold_at DESC
+            LIMIT 200
+        `, [req.params.id]);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -1995,43 +1995,95 @@ function renderJobListings(listings) {
 }
 
 /* ─── Relist Detection Panel ─────────────────────────────── */
+
+function relistCardHtml(label, r, prefix) {
+  const title = r[prefix + '_title'] || r.title || '?';
+  const price = r[prefix + '_price'] || r.price || '?';
+  const loc = r[prefix + '_sub_location'] || r[prefix + '_location'] || '—';
+  const phone = r[prefix + '_phone'] || '—';
+  const seller = r[prefix + '_seller'] || '—';
+  const size = r[prefix + '_size'] ? r[prefix + '_size'] + ' perches' : '—';
+  const date = prefix === 'old'
+    ? (r.old_sold_at ? `Sold ${new Date(r.old_sold_at).toLocaleDateString()}` : '—')
+    : (r.first_seen_at ? `Listed ${new Date(r.first_seen_at).toLocaleDateString()}` : '—');
+  const url = prefix === 'old' ? r.old_url : r.url;
+
+  return `
+    <div style="flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:0.8rem">
+      <div style="font-weight:600;margin-bottom:6px;color:${prefix === 'old' ? 'var(--danger)' : 'var(--success)'}">${label}</div>
+      <div style="margin-bottom:3px"><b>${esc(title)}</b></div>
+      <div style="color:var(--text-secondary)">
+        💰 ${esc(price)}<br>
+        📍 ${esc(loc)}<br>
+        📞 ${esc(phone)}<br>
+        👤 ${esc(seller)}<br>
+        📐 ${esc(size)}<br>
+        📅 ${date}
+      </div>
+      ${url ? `<a href="${esc(url)}" target="_blank" style="font-size:0.75rem;color:var(--accent)">View on ikman →</a>` : ''}
+    </div>`;
+}
+
+function soldCardHtml(s) {
+  return `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;font-size:0.8rem">
+        <div style="font-weight:600;margin-bottom:3px">${esc(s.title || '?')}</div>
+        <div style="color:var(--text-secondary)">
+          💰 ${esc(s.price || '?')} · 📍 ${esc(s.sub_location || s.location || '—')} · 📞 ${esc(s.phone || '—')}<br>
+          👤 ${esc(s.seller_name || '—')} · 📐 ${s.size_perches ? s.size_perches + 'p' : '—'} · 📅 Sold ${s.sold_at ? new Date(s.sold_at).toLocaleDateString() : '?'}
+        </div>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="manualLink(${s.id})">Link</button>
+    </div>`;
+}
+
+let _manualLinkTarget = null;
+
 async function loadRelists(jobId) {
   const panel = document.getElementById('relist-panel');
   try {
     const relists = await api('GET', `/jobs/${jobId}/relists`);
 
-    let scanBtn = `<button class="btn btn-sm btn-ghost" onclick="backfillRelists()" style="font-size:0.78rem">🔍 Scan for Relists</button>`;
+    const toolbar = `<div style="display:flex;gap:6px;margin-bottom:10px">
+      <button class="btn btn-sm btn-ghost" onclick="backfillRelists()" style="font-size:0.78rem">🔍 Scan for Relists</button>
+      <button class="btn btn-sm btn-ghost" onclick="openManualLinkPicker()" style="font-size:0.78rem">🔗 Manual Link</button>
+    </div>`;
 
     if (!relists || relists.length === 0) {
-      panel.innerHTML = `<div style="margin-bottom:8px">${scanBtn}</div>`;
+      panel.innerHTML = toolbar;
       return;
     }
 
     panel.innerHTML = `
+      ${toolbar}
       <div style="background:rgba(99,102,241,0.08);border:1px solid var(--accent);border-radius:var(--radius);padding:16px">
-        <h4 style="margin:0 0 12px;color:var(--accent)">🔄 ${relists.length} possible relist${relists.length > 1 ? 's' : ''} detected ${scanBtn}</h4>
+        <h4 style="margin:0 0 12px;color:var(--accent)">🔄 ${relists.length} possible relist${relists.length > 1 ? 's' : ''} detected</h4>
         ${relists.map(r => {
       const daysSinceSold = r.old_sold_at
-        ? Math.round((Date.now() - new Date(r.old_sold_at).getTime()) / 86400000)
+        ? Math.round((Date.now() - new Date(r.old_sold_at).getTime()) / 86400000) + 'd ago'
         : '?';
-      const confBadge = r.relist_confidence === 'auto'
-        ? '<span style="background:rgba(34,197,94,0.15);color:var(--success);padding:2px 6px;border-radius:4px;font-size:0.72rem">Auto-matched</span>'
-        : '<span style="background:rgba(245,158,11,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.72rem">Suggested</span>';
       return `
           <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">
-            <div style="display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap">
-              <div style="flex:1">
-                <div style="font-weight:600;margin-bottom:4px">${esc(r.title || '?')} ${confBadge}</div>
-                <div style="font-size:0.82rem;color:var(--text-secondary)">
-                  Sold ${daysSinceSold} days ago → New listing found<br>
-                  Old: ${esc(r.old_price || '?')} → New: ${esc(r.price || '?')}
-                </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+              <div style="font-weight:600;font-size:0.88rem">${esc(r.title || '?')}
+                <span style="background:rgba(245,158,11,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.72rem">📞 Phone match</span>
               </div>
               <div style="display:flex;gap:6px">
                 <button class="btn btn-sm btn-success" onclick="confirmRelist(${r.id})">✓ Confirm</button>
                 <button class="btn btn-sm btn-ghost" onclick="dismissRelist(${r.id})">✕ Dismiss</button>
               </div>
             </div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:6px">
+              Old listing sold ${daysSinceSold} · ${esc(r.old_price || '?')} → ${esc(r.price || '?')}
+            </div>
+            <details>
+              <summary style="cursor:pointer;font-size:0.78rem;color:var(--accent)">Show details</summary>
+              <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+                ${relistCardHtml('🔴 Old (Sold)', r, 'old')}
+                ${relistCardHtml('🟢 New (Active)', r, 'new')}
+              </div>
+            </details>
           </div>`;
     }).join('')}
       </div>
@@ -2062,6 +2114,58 @@ async function backfillRelists() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan for Relists'; }
   }
+}
+
+async function openManualLinkPicker() {
+  if (!currentJobId) return;
+  // Ask for listing ID to link
+  const listingId = prompt('Enter the ID of the ACTIVE listing you want to link (find in card footer):');
+  if (!listingId) return;
+  _manualLinkTarget = listingId;
+
+  // Load sold listings
+  try {
+    const sold = await api('GET', `/jobs/${currentJobId}/sold-listings`);
+    if (!sold || sold.length === 0) { alert('No sold listings found'); return; }
+
+    const panel = document.getElementById('relist-panel');
+    const existing = panel.innerHTML;
+    panel.innerHTML = `
+      <div style="background:rgba(239,68,68,0.08);border:1px solid var(--danger);border-radius:var(--radius);padding:16px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h4 style="margin:0;color:var(--danger)">🔗 Pick sold listing to link with #${esc(listingId)}</h4>
+          <button class="btn btn-sm btn-ghost" onclick="loadRelists(currentJobId)">✕ Cancel</button>
+        </div>
+        <input id="manual-link-search" type="text" placeholder="Filter by title, phone, seller..."
+               oninput="filterManualLink()" class="form-input" style="margin-bottom:10px;width:100%">
+        <div id="manual-link-list" style="max-height:400px;overflow-y:auto">
+          ${sold.map(s => soldCardHtml(s)).join('')}
+        </div>
+      </div>
+    `;
+    window._soldListingsCache = sold;
+  } catch (err) { alert('Error: ' + err.message); }
+}
+
+function filterManualLink() {
+  const q = (document.getElementById('manual-link-search')?.value || '').toLowerCase();
+  const sold = window._soldListingsCache || [];
+  const filtered = sold.filter(s =>
+    (s.title || '').toLowerCase().includes(q) ||
+    (s.phone || '').includes(q) ||
+    (s.seller_name || '').toLowerCase().includes(q)
+  );
+  document.getElementById('manual-link-list').innerHTML = filtered.map(s => soldCardHtml(s)).join('') ||
+    '<div style="color:var(--text-muted);padding:12px;text-align:center">No matches</div>';
+}
+
+async function manualLink(soldId) {
+  if (!_manualLinkTarget) return;
+  try {
+    await api('POST', `/listings/${_manualLinkTarget}/link-relist`, { sold_id: soldId });
+    _manualLinkTarget = null;
+    loadRelists(currentJobId);
+  } catch (err) { alert('Error: ' + err.message); }
 }
 
 /* ─── Init ─────────────────────────────────────────────────────────── */

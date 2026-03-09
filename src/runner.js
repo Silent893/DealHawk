@@ -39,47 +39,36 @@ function titleSimilarity(a, b) {
 
 /**
  * Check if a new listing is a relist of a recently-sold one.
- * Requires matching phone number + title similarity ≥70%.
- * All matches are 'suggested' — user must confirm manually.
+ * Matches by phone number only — all matches are 'suggested'.
  */
-async function checkForRelist(jobId, newListingId, title, location) {
+async function checkForRelist(jobId, newListingId) {
     try {
-        // Get the new listing's phone
         const newRow = await db.query('SELECT phone FROM listings WHERE id = $1', [newListingId]);
         const newPhone = newRow.rows[0]?.phone;
-        if (!newPhone) return; // No phone, can't match
+        if (!newPhone) return;
 
         // Find recently-sold listings with the same phone
         const result = await db.query(`
-            SELECT id, title, phone, sold_at
+            SELECT id, title, sold_at
             FROM listings
             WHERE job_id = $1 AND status = 'sold'
-              AND sold_at > NOW() - INTERVAL '60 days'
+              AND sold_at > NOW() - INTERVAL '90 days'
               AND phone = $2
               AND id != $3
             ORDER BY sold_at DESC
-            LIMIT 50
+            LIMIT 1
         `, [jobId, newPhone, newListingId]);
 
-        let bestMatch = null;
-        let bestSim = 0;
-        for (const sold of result.rows) {
-            const sim = titleSimilarity(title, sold.title);
-            if (sim > bestSim) {
-                bestSim = sim;
-                bestMatch = sold;
-            }
-        }
-
-        if (bestMatch && bestSim >= 0.7) {
+        if (result.rows.length > 0) {
+            const sold = result.rows[0];
             await db.query(
                 "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
-                [bestMatch.id, newListingId]
+                [sold.id, newListingId]
             );
-            const daysSinceSold = bestMatch.sold_at
-                ? Math.round((Date.now() - new Date(bestMatch.sold_at).getTime()) / 86400000)
+            const daysSinceSold = sold.sold_at
+                ? Math.round((Date.now() - new Date(sold.sold_at).getTime()) / 86400000)
                 : '?';
-            console.log(`    🔄 RELIST SUGGESTION (${(bestSim * 100).toFixed(0)}% title, phone match): "${title}" → sold ${daysSinceSold}d ago`);
+            console.log(`    🔄 RELIST SUGGESTION (phone match): sold ${daysSinceSold}d ago`);
         }
     } catch (err) {
         console.error(`    ⚠ Relist check error: ${err.message}`);
@@ -247,7 +236,7 @@ async function runJob(job, opts = {}) {
                 }
 
                 // Check for relist (fuzzy match against recently-sold)
-                await checkForRelist(job.id, row.id, listing.title, listing.location);
+                await checkForRelist(job.id, row.id);
 
                 // Check deep-dive rules
                 if (matchesRules(listing, job.deep_dive_rules)) {
