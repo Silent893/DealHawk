@@ -212,20 +212,8 @@ async function runJob(job, opts = {}) {
             const isNew = row.is_new;
 
             if (isNew) {
-                newListings++;
                 console.log(`  ✓ NEW: ${listing.title || listing.slug}`);
                 console.log(`    ${listing.sizeText} | ${listing.price} | ${listing.location}`);
-
-                // Notify: new listing
-                const ns = job.notification_settings || {};
-                if (ns.notify_new) {
-                    notify('new_listing', {
-                        job_name: job.name, job_id: job.id,
-                        title: listing.title, price: listing.price, url: listing.url,
-                        price_per_perch: pricePerPerch, total_price: totalPrice,
-                        size_perches: listing.sizePerches, location: listing.location,
-                    });
-                }
 
                 // Record initial price
                 if (listing.priceValue) {
@@ -235,7 +223,7 @@ async function runJob(job, opts = {}) {
                     );
                 }
 
-                // Check for relist (fuzzy match against recently-sold)
+                // Check for relist (phone match against recently-sold)
                 await checkForRelist(job.id, row.id);
 
                 // Check deep-dive rules
@@ -265,8 +253,23 @@ async function runJob(job, opts = {}) {
                             ]
                         );
                         deepDived++;
-                        if (matchedLog) console.log(`    ✅ Matched log rules`);
-                        else console.log(`    ⏭ Didn't match log rules`);
+                        if (matchedLog) {
+                            console.log(`    ✅ Matched log rules`);
+                            newListings++;
+
+                            // Notify: new matched listing
+                            const ns = job.notification_settings || {};
+                            if (ns.notify_new) {
+                                notify('new_listing', {
+                                    job_name: job.name, job_id: job.id,
+                                    title: listing.title, price: listing.price, url: listing.url,
+                                    price_per_perch: pricePerPerch, total_price: totalPrice,
+                                    size_perches: listing.sizePerches, location: listing.location,
+                                });
+                            }
+                        } else {
+                            console.log(`    ⏭ Didn't match log rules`);
+                        }
                         if (detail.phone) console.log(`    📞 ${detail.phone}`);
                     } catch (detailErr) {
                         console.error(`    ✗ Deep-dive failed: ${detailErr.message}`);
