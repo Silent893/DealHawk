@@ -829,6 +829,75 @@ app.get('/api/listings/:id/prices', async (req, res) => {
     }
 });
 
+// ─── Relist Detection ───────────────────────────────────────────
+
+app.get('/api/jobs/:id/relists', async (req, res) => {
+    try {
+        const result = await db.query(`
+            SELECT
+                new_l.id, new_l.title, new_l.price, new_l.price_value, new_l.url,
+                new_l.relist_of, new_l.relist_confidence,
+                new_l.first_seen_at,
+                old_l.id AS old_id, old_l.title AS old_title, old_l.price AS old_price,
+                old_l.price_value AS old_price_value, old_l.sold_at AS old_sold_at,
+                old_l.url AS old_url
+            FROM listings new_l
+            JOIN listings old_l ON new_l.relist_of = old_l.id
+            WHERE new_l.job_id = $1
+              AND new_l.relist_confidence IN ('auto', 'suggested')
+            ORDER BY new_l.first_seen_at DESC
+        `, [req.params.id]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/listings/:id/confirm-relist', async (req, res) => {
+    try {
+        // Get the relist info
+        const listing = await db.query(
+            'SELECT id, relist_of FROM listings WHERE id = $1', [req.params.id]
+        );
+        if (!listing.rows[0]?.relist_of) {
+            return res.status(400).json({ error: 'No relist link found' });
+        }
+
+        // Confirm the link
+        await db.query(
+            "UPDATE listings SET relist_confidence = 'confirmed' WHERE id = $1",
+            [req.params.id]
+        );
+
+        // Merge price history from old listing
+        await db.query(`
+            INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
+            SELECT $1, price_value, price_type, price_text, recorded_at
+            FROM price_history WHERE listing_id = $2
+            AND NOT EXISTS (
+                SELECT 1 FROM price_history ph2
+                WHERE ph2.listing_id = $1 AND ph2.recorded_at = price_history.recorded_at
+            )
+        `, [req.params.id, listing.rows[0].relist_of]);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/listings/:id/dismiss-relist', async (req, res) => {
+    try {
+        await db.query(
+            "UPDATE listings SET relist_of = NULL, relist_confidence = 'dismissed' WHERE id = $1",
+            [req.params.id]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Start server ───────────────────────────────────────────────
 
 async function start() {

@@ -174,6 +174,19 @@ const MIGRATIONS = [
       END $$;
     `,
   },
+  {
+    name: 'add_relist_detection',
+    sql: `
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='relist_of') THEN
+          ALTER TABLE listings ADD COLUMN relist_of INT REFERENCES listings(id);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='listings' AND column_name='relist_confidence') THEN
+          ALTER TABLE listings ADD COLUMN relist_confidence VARCHAR(20);
+        END IF;
+      END $$;
+    `,
+  },
 ];
 
 async function migrate() {

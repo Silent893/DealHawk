@@ -7,6 +7,89 @@ const { notify } = require('./notifier');
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
+ * Levenshtein distance between two strings.
+ */
+function levenshtein(a, b) {
+    const m = a.length, n = b.length;
+    const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            dp[i][j] = a[i - 1] === b[j - 1]
+                ? dp[i - 1][j - 1]
+                : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+        }
+    }
+    return dp[m][n];
+}
+
+/**
+ * Title similarity ratio (0-1). Returns 1.0 for identical titles.
+ */
+function titleSimilarity(a, b) {
+    if (!a || !b) return 0;
+    const na = a.toLowerCase().trim();
+    const nb = b.toLowerCase().trim();
+    if (na === nb) return 1;
+    const maxLen = Math.max(na.length, nb.length);
+    if (maxLen === 0) return 1;
+    return 1 - levenshtein(na, nb) / maxLen;
+}
+
+/**
+ * Check if a new listing is a relist of a recently-sold one.
+ * Auto-links at ≥90% title similarity, suggests at ≥70%.
+ */
+async function checkForRelist(jobId, newListingId, title, location) {
+    try {
+        const result = await db.query(`
+            SELECT id, title, sub_location, seller_name, sold_at
+            FROM listings
+            WHERE job_id = $1 AND status = 'sold'
+              AND sold_at > NOW() - INTERVAL '60 days'
+              AND id != $2
+            ORDER BY sold_at DESC
+            LIMIT 100
+        `, [jobId, newListingId]);
+
+        let bestMatch = null;
+        let bestSim = 0;
+        for (const sold of result.rows) {
+            const sim = titleSimilarity(title, sold.title);
+            if (sim > bestSim) {
+                bestSim = sim;
+                bestMatch = sold;
+            }
+        }
+
+        if (bestMatch && bestSim >= 0.7) {
+            const confidence = bestSim >= 0.9 ? 'auto' : 'suggested';
+            await db.query(
+                'UPDATE listings SET relist_of = $1, relist_confidence = $2 WHERE id = $3',
+                [bestMatch.id, confidence, newListingId]
+            );
+            const daysSinceSold = bestMatch.sold_at
+                ? Math.round((Date.now() - new Date(bestMatch.sold_at).getTime()) / 86400000)
+                : '?';
+            console.log(`    🔄 RELIST (${confidence}, ${(bestSim * 100).toFixed(0)}%): "${title}" → was sold ${daysSinceSold}d ago`);
+
+            // If auto-confirmed, merge price history from old listing
+            if (confidence === 'auto') {
+                await db.query(`
+                    INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
+                    SELECT $1, price_value, price_type, price_text, recorded_at
+                    FROM price_history WHERE listing_id = $2
+                    ON CONFLICT DO NOTHING
+                `, [newListingId, bestMatch.id]);
+            }
+        }
+    } catch (err) {
+        console.error(`    ⚠ Relist check error: ${err.message}`);
+    }
+}
+
+/**
  * Compute normalized price values from raw price, type, and land size.
  */
 function computeNormalizedPrices(priceVal, priceType, sizePerches) {
@@ -165,6 +248,9 @@ async function runJob(job, opts = {}) {
                         [row.id, listing.priceValue, listing.priceType, listing.price]
                     );
                 }
+
+                // Check for relist (fuzzy match against recently-sold)
+                await checkForRelist(job.id, row.id, listing.title, listing.location);
 
                 // Check deep-dive rules
                 if (matchesRules(listing, job.deep_dive_rules)) {

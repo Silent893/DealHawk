@@ -988,6 +988,7 @@ async function loadJobDetail(id) {
     const allListings = await api('GET', `/listings?job_id=${id}&matched_only=true&limit=500`);
     const chartListings = allListings.listings || allListings;
     renderDistributionCharts(chartListings, id);
+    loadRelists(id);
   } catch (err) {
     console.error('Failed to load job detail:', err);
   }
@@ -1994,7 +1995,56 @@ function renderJobListings(listings) {
   grid.innerHTML = listings.map(l => renderListingCard(l)).join('');
 }
 
-/* ─── Init ─────────────────────────────────────────────────── */
+/* ─── Relist Detection Panel ─────────────────────────────── */
+async function loadRelists(jobId) {
+  const panel = document.getElementById('relist-panel');
+  try {
+    const relists = await api('GET', `/jobs/${jobId}/relists`);
+    if (!relists || relists.length === 0) { panel.innerHTML = ''; return; }
+
+    panel.innerHTML = `
+      <div style="background:rgba(99,102,241,0.08);border:1px solid var(--accent);border-radius:var(--radius);padding:16px">
+        <h4 style="margin:0 0 12px;color:var(--accent)">🔄 ${relists.length} possible relist${relists.length > 1 ? 's' : ''} detected</h4>
+        ${relists.map(r => {
+      const daysSinceSold = r.old_sold_at
+        ? Math.round((Date.now() - new Date(r.old_sold_at).getTime()) / 86400000)
+        : '?';
+      const confBadge = r.relist_confidence === 'auto'
+        ? '<span style="background:rgba(34,197,94,0.15);color:var(--success);padding:2px 6px;border-radius:4px;font-size:0.72rem">Auto-matched</span>'
+        : '<span style="background:rgba(245,158,11,0.15);color:var(--warning);padding:2px 6px;border-radius:4px;font-size:0.72rem">Suggested</span>';
+      return `
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap">
+              <div style="flex:1">
+                <div style="font-weight:600;margin-bottom:4px">${esc(r.title || '?')} ${confBadge}</div>
+                <div style="font-size:0.82rem;color:var(--text-secondary)">
+                  Sold ${daysSinceSold} days ago → New listing found<br>
+                  Old: ${esc(r.old_price || '?')} → New: ${esc(r.price || '?')}
+                </div>
+              </div>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-sm btn-success" onclick="confirmRelist(${r.id})">✓ Confirm</button>
+                <button class="btn btn-sm btn-ghost" onclick="dismissRelist(${r.id})">✕ Dismiss</button>
+              </div>
+            </div>
+          </div>`;
+    }).join('')}
+      </div>
+    `;
+  } catch (_) { panel.innerHTML = ''; }
+}
+
+async function confirmRelist(id) {
+  await api('POST', `/listings/${id}/confirm-relist`);
+  loadRelists(currentJobId);
+}
+
+async function dismissRelist(id) {
+  await api('POST', `/listings/${id}/dismiss-relist`);
+  loadRelists(currentJobId);
+}
+
+/* ─── Init ─────────────────────────────────────────────────────────── */
 loadJobs();
 api('GET', '/version').then(d => {
   document.getElementById('app-version').textContent = `v${d.version}`;
