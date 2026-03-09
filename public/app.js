@@ -1999,11 +1999,17 @@ async function loadRelists(jobId) {
   const panel = document.getElementById('relist-panel');
   try {
     const relists = await api('GET', `/jobs/${jobId}/relists`);
-    if (!relists || relists.length === 0) { panel.innerHTML = ''; return; }
+
+    let scanBtn = `<button class="btn btn-sm btn-ghost" onclick="backfillRelists()" style="font-size:0.78rem">🔍 Scan for Relists</button>`;
+
+    if (!relists || relists.length === 0) {
+      panel.innerHTML = `<div style="margin-bottom:8px">${scanBtn}</div>`;
+      return;
+    }
 
     panel.innerHTML = `
       <div style="background:rgba(99,102,241,0.08);border:1px solid var(--accent);border-radius:var(--radius);padding:16px">
-        <h4 style="margin:0 0 12px;color:var(--accent)">🔄 ${relists.length} possible relist${relists.length > 1 ? 's' : ''} detected</h4>
+        <h4 style="margin:0 0 12px;color:var(--accent)">🔄 ${relists.length} possible relist${relists.length > 1 ? 's' : ''} detected ${scanBtn}</h4>
         ${relists.map(r => {
       const daysSinceSold = r.old_sold_at
         ? Math.round((Date.now() - new Date(r.old_sold_at).getTime()) / 86400000)
@@ -2041,6 +2047,21 @@ async function confirmRelist(id) {
 async function dismissRelist(id) {
   await api('POST', `/listings/${id}/dismiss-relist`);
   loadRelists(currentJobId);
+}
+
+async function backfillRelists() {
+  if (!currentJobId) return;
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning...'; }
+  try {
+    const result = await api('POST', `/jobs/${currentJobId}/backfill-relists`);
+    alert(`Scanned ${result.scanned} listings, found ${result.matched} possible relists`);
+    loadRelists(currentJobId);
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan for Relists'; }
+  }
 }
 
 /* ─── Init ─────────────────────────────────────────────────────────── */

@@ -898,6 +898,66 @@ app.post('/api/listings/:id/dismiss-relist', async (req, res) => {
     }
 });
 
+app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
+    const jobId = req.params.id;
+    try {
+        // Levenshtein similarity (same as runner.js)
+        function lev(a, b) {
+            const m = a.length, n = b.length;
+            const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+            for (let i = 0; i <= m; i++) dp[i][0] = i;
+            for (let j = 0; j <= n; j++) dp[0][j] = j;
+            for (let i = 1; i <= m; i++)
+                for (let j = 1; j <= n; j++)
+                    dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+            return dp[m][n];
+        }
+        function sim(a, b) {
+            if (!a || !b) return 0;
+            const na = a.toLowerCase().trim(), nb = b.toLowerCase().trim();
+            if (na === nb) return 1;
+            const max = Math.max(na.length, nb.length);
+            return max === 0 ? 1 : 1 - lev(na, nb) / max;
+        }
+
+        // Get active listings without existing relist link
+        const active = await db.query(
+            `SELECT id, title, location FROM listings WHERE job_id = $1 AND status = 'active' AND relist_of IS NULL`,
+            [jobId]
+        );
+        // Get sold listings from last 90 days
+        const sold = await db.query(
+            `SELECT id, title, sub_location, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days'`,
+            [jobId]
+        );
+
+        let matched = 0;
+        for (const act of active.rows) {
+            let bestMatch = null, bestSim = 0;
+            for (const s of sold.rows) {
+                const score = sim(act.title, s.title);
+                if (score > bestSim) { bestSim = score; bestMatch = s; }
+            }
+            if (bestMatch && bestSim >= 0.7) {
+                const confidence = bestSim >= 0.9 ? 'auto' : 'suggested';
+                await db.query('UPDATE listings SET relist_of = $1, relist_confidence = $2 WHERE id = $3', [bestMatch.id, confidence, act.id]);
+                if (confidence === 'auto') {
+                    await db.query(`
+                        INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
+                        SELECT $1, price_value, price_type, price_text, recorded_at
+                        FROM price_history WHERE listing_id = $2
+                        ON CONFLICT DO NOTHING
+                    `, [act.id, bestMatch.id]);
+                }
+                matched++;
+            }
+        }
+        res.json({ success: true, matched, scanned: active.rows.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Start server ───────────────────────────────────────────────
 
 async function start() {
