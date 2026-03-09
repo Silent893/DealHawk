@@ -745,7 +745,7 @@ app.get('/api/listings', async (req, res) => {
             `SELECT l.*, j.name as job_name, j.is_land_mode as job_is_land_mode,
               (SELECT ph.price_value FROM price_history ph
                WHERE ph.listing_id = l.id ORDER BY ph.recorded_at DESC LIMIT 1 OFFSET 1) AS prev_price,
-              (SELECT COUNT(*) - 1 FROM price_history ph WHERE ph.listing_id = l.id) AS price_changes,
+              (SELECT GREATEST(COUNT(DISTINCT price_value) - 1, 0) FROM price_history ph WHERE ph.listing_id = l.id) AS price_changes,
               (SELECT AVG(CASE WHEN j.is_land_mode THEN l2.price_per_perch ELSE l2.price_value END) FROM listings l2
                WHERE l2.job_id = l.job_id AND l2.price_value IS NOT NULL AND l2.status = 'active') AS job_avg_price
              FROM listings l

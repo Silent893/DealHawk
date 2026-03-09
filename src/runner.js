@@ -332,11 +332,6 @@ async function runJob(job, opts = {}) {
                         await db.query('UPDATE listings SET last_seen_at = NOW() WHERE id = $1', [listing.id]);
 
                         if (check.priceValue) {
-                            await db.query(
-                                'INSERT INTO price_history (listing_id, price_value, price_type, price_text) VALUES ($1, $2, $3, $4)',
-                                [listing.id, check.priceValue, check.priceType, check.priceText]
-                            );
-
                             // Compute normalized prices for comparison
                             const { pricePerPerch: newPPP, totalPrice: newTP } = computeNormalizedPrices(
                                 check.priceValue, check.priceType, parseFloat(listing.size_perches) || null
@@ -358,6 +353,12 @@ async function runJob(job, opts = {}) {
                                 const label = job.is_land_mode ? '/perch' : '';
                                 console.log(`    ${arrow} PRICE CHANGE: ${listing.title || listing.slug}`);
                                 console.log(`      Rs ${oldCompare.toLocaleString()}${label} → Rs ${newCompare.toLocaleString()}${label} (${pct}%)`);
+
+                                // Only record price_history when price actually changed
+                                await db.query(
+                                    'INSERT INTO price_history (listing_id, price_value, price_type, price_text) VALUES ($1, $2, $3, $4)',
+                                    [listing.id, check.priceValue, check.priceType, check.priceText]
+                                );
 
                                 // Notify: price drop (only drops, not increases)
                                 if (diff < 0) {

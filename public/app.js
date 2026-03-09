@@ -1170,7 +1170,6 @@ async function renderDistributionCharts(listings, jobId) {
   renderPriceByArea(listings);
   renderPriceVsSize(listings);
   renderTimeToSell(listings);
-  renderSellerActivity(listings);
   populateCompareSelector(listings);
   await renderSupplyTrend(jobId);
   await renderSellThrough(jobId);
@@ -1322,7 +1321,7 @@ function renderPriceByArea(listings) {
   const showPP = window._isLandMode && !window._priceViewTotal;
   const getP = l => showPP ? parseFloat(l.price_per_perch || l.price_value) : parseFloat(l.price_value);
   const active = listings.filter(l => l.status === 'active' && l.sub_location && getP(l) > 0);
-  if (active.length < 2) return;
+  if (active.length < 1) { ctx.parentElement.querySelector('canvas').style.display = 'none'; return; }
 
   const areaMap = {};
   active.forEach(l => {
@@ -1333,7 +1332,7 @@ function renderPriceByArea(listings) {
 
   const sorted = Object.entries(areaMap)
     .map(([area, prices]) => ({ area, avg: prices.reduce((a, b) => a + b, 0) / prices.length, count: prices.length }))
-    .filter(a => a.count >= 2)
+    .filter(a => a.count >= 1)
     .sort((a, b) => a.avg - b.avg);
   if (sorted.length === 0) return;
 
@@ -1350,7 +1349,7 @@ function renderPriceByArea(listings) {
     },
     options: {
       indexAxis: 'y',
-      responsive: true, maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: true,
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => formatPrice(c.parsed.x) } } },
       scales: {
         x: { ticks: { callback: v => formatPrice(v), color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -1366,7 +1365,7 @@ function renderTimeToSell(listings) {
   if (timeToSellChart) { timeToSellChart.destroy(); timeToSellChart = null; }
 
   const sold = listings.filter(l => l.status === 'sold' && l.posted_at && l.sold_at);
-  if (sold.length < 3) return;
+  if (sold.length < 1) { ctx.parentElement.querySelector('canvas').style.display = 'none'; return; }
 
   const buckets = { '0-3d': 0, '4-7d': 0, '1-2w': 0, '2-4w': 0, '1-2m': 0, '2m+': 0 };
   sold.forEach(l => {
@@ -1391,7 +1390,7 @@ function renderTimeToSell(listings) {
       }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: true,
       plugins: { legend: { display: false } },
       scales: {
         y: { ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -1422,7 +1421,7 @@ async function renderSellThrough(jobId) {
         }],
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: true,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.parsed.y.toFixed(1) + '%' } } },
         scales: {
           y: { ticks: { callback: v => v + '%', color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -1494,7 +1493,7 @@ function renderPriceVsSize(listings) {
       ],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: true,
       plugins: {
         legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
         tooltip: { callbacks: { label: c => `${c.parsed.x}p → Rs ${Number(c.parsed.y).toLocaleString()}/perch` } },
@@ -1554,7 +1553,7 @@ async function renderCompareChart() {
     type: 'line',
     data: { labels: allLabels, datasets },
     options: {
-      responsive: true, maintainAspectRatio: false, spanGaps: true,
+      responsive: true, maintainAspectRatio: true, spanGaps: true,
       plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } }, tooltip: { callbacks: { label: c => formatPrice(c.parsed.y) } } },
       scales: {
         y: { ticks: { callback: v => formatPrice(v), color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
