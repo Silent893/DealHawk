@@ -80,10 +80,10 @@ app.get('/api/stats', async (req, res) => {
     try {
         const result = await db.query(`
           SELECT
-            (SELECT COUNT(*) FROM listings) AS total_listings,
+            (SELECT COUNT(*) FROM listings WHERE status != 'merged') AS total_listings,
             (SELECT COUNT(*) FROM listings WHERE status = 'active') AS active_listings,
             (SELECT COUNT(*) FROM listings WHERE status = 'sold') AS sold_listings,
-            (SELECT COUNT(*) FROM listings WHERE matched_log = true) AS matched_listings,
+            (SELECT COUNT(*) FROM listings WHERE matched_log = true AND status != 'merged') AS matched_listings,
             (SELECT COUNT(*) FROM jobs WHERE active = true) AS active_jobs,
             (SELECT COUNT(DISTINCT ph.listing_id) FROM price_history ph
               JOIN price_history ph2 ON ph.listing_id = ph2.listing_id AND ph2.id != ph.id
@@ -160,7 +160,7 @@ app.get('/api/jobs/:id/analytics', async (req, res) => {
                 ROUND(AVG(CASE WHEN ph.recorded_at <= NOW() - INTERVAL '7 days' AND ph.recorded_at > NOW() - INTERVAL '14 days' THEN ph.price_value END)) AS avg_prev
             FROM price_history ph
             JOIN listings l ON l.id = ph.listing_id
-            WHERE l.job_id = $1 AND l.matched_log = true
+            WHERE l.job_id = $1 AND l.matched_log = true AND l.status != 'merged'
         `, [jobId]);
 
         // Listing age stats
@@ -253,7 +253,7 @@ app.get('/api/jobs/:id/price-history', async (req, res) => {
                     COUNT(DISTINCT l.id) AS listing_count
                 FROM price_history ph
                 JOIN listings l ON l.id = ph.listing_id
-                WHERE l.job_id = $1 AND l.matched_log = true
+                WHERE l.job_id = $1 AND l.matched_log = true AND l.status != 'merged'
                 GROUP BY day, group_key
                 ORDER BY day
             `, [jobId]);
@@ -265,7 +265,7 @@ app.get('/api/jobs/:id/price-history', async (req, res) => {
                     COUNT(DISTINCT ph.listing_id) AS listing_count
                 FROM price_history ph
                 JOIN listings l ON l.id = ph.listing_id
-                WHERE l.job_id = $1 AND l.matched_log = true
+                WHERE l.job_id = $1 AND l.matched_log = true AND l.status != 'merged'
                 GROUP BY day
                 ORDER BY day
             `, [jobId]);
@@ -287,7 +287,7 @@ app.get('/api/jobs/:id/supply-trend', async (req, res) => {
                 COUNT(*) FILTER (WHERE status = 'sold') AS sold_count,
                 COUNT(*) FILTER (WHERE status = 'active') AS active_count
             FROM listings
-            WHERE job_id = $1 AND matched_log = true AND first_seen_at IS NOT NULL
+            WHERE job_id = $1 AND matched_log = true AND first_seen_at IS NOT NULL AND status != 'merged'
             GROUP BY week
             ORDER BY week
         `, [jobId]);
@@ -326,7 +326,7 @@ app.get('/api/jobs/:id/sell-through', async (req, res) => {
                     ELSE 0
                 END AS rate
             FROM weeks w
-            LEFT JOIN listings l ON l.job_id = $1 AND l.matched_log = true
+            LEFT JOIN listings l ON l.job_id = $1 AND l.matched_log = true AND l.status != 'merged'
             GROUP BY w.week
             ORDER BY w.week
         `, [jobId]);
@@ -779,7 +779,7 @@ app.get('/api/jobs/:id/analytics', async (req, res) => {
           SELECT
             COUNT(*) FILTER (WHERE status = 'active') AS active_count,
             COUNT(*) FILTER (WHERE status = 'sold') AS sold_count,
-            COUNT(*) FILTER (WHERE matched_log = true) AS matched_count,
+            COUNT(*) FILTER (WHERE matched_log = true AND status != 'merged') AS matched_count,
             ROUND(AVG(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active')) AS avg_price,
             MIN(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS min_price,
             MAX(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS max_price,
