@@ -4,6 +4,7 @@ let wizardStep = 0;
 let wizardData = {};
 let wizardEditId = null;  // non-null = editing existing job
 let listingPage = 0;
+let runningJobIds = new Set();  // track which jobs are currently running
 
 const WIZARD_STEPS = [
   { label: 'URL', title: 'Paste listing page URL' },
@@ -33,6 +34,18 @@ function showView(view) {
 }
 
 document.getElementById('new-job-btn').addEventListener('click', openWizard);
+document.getElementById('run-all-btn').addEventListener('click', triggerRunAll);
+
+// Poll running jobs every 5 seconds
+setInterval(async () => {
+  try {
+    const list = await api('GET', '/jobs/running');
+    const newSet = new Set(list.map(j => j.job_id));
+    const changed = newSet.size !== runningJobIds.size || [...newSet].some(id => !runningJobIds.has(id));
+    runningJobIds = newSet;
+    if (changed && currentView === 'jobs') loadJobs();
+  } catch (_) { /* ignore */ }
+}, 5000);
 
 /* ─── API Helpers ──────────────────────────────────────────── */
 async function api(method, path, body) {
@@ -194,7 +207,9 @@ async function loadJobs() {
 
   grid.innerHTML = jobs.map(j => {
     const avgP = j.avg_price ? formatPrice(parseFloat(j.avg_price)) : '—';
+    const isRunning = runningJobIds.has(j.id);
     const badges = [];
+    if (isRunning) badges.push(`<span style="color:#6366f1;font-size:0.75rem">🔄 Running...</span>`);
     if (parseInt(j.new_7d) > 0) badges.push(`<span style="color:#22c55e;font-size:0.75rem">🆕 ${j.new_7d} new</span>`);
     if (parseInt(j.price_drops) > 0) badges.push(`<span style="color:#f59e0b;font-size:0.75rem">💰 ${j.price_drops} drops</span>`);
     if (parseInt(j.sold_7d) > 0) badges.push(`<span style="color:#ef4444;font-size:0.75rem">🔴 ${j.sold_7d} sold</span>`);
@@ -232,7 +247,10 @@ async function loadJobs() {
         ${j.category ? ' · ' + esc(j.category) : ''}
       </div>
       <div class="job-card-actions" onclick="event.stopPropagation()">
-        <button class="btn btn-sm btn-primary" onclick="triggerRun(${j.id})">▶ Run Now</button>
+        ${isRunning
+        ? `<button class="btn btn-sm btn-danger" onclick="forceStopJob(${j.id})">⏹ Force Stop</button>`
+        : `<button class="btn btn-sm btn-primary" onclick="triggerRun(${j.id})">▶ Run Now</button>`
+      }
         <button class="btn btn-sm btn-ghost" onclick="editJob(${j.id})">✏️ Edit</button>
         <button class="btn btn-sm btn-ghost" onclick="toggleJob(${j.id}, ${!j.active})">
           ${j.active ? '⏸ Pause' : '▶ Resume'}
@@ -245,7 +263,26 @@ async function loadJobs() {
 
 async function triggerRun(id) {
   await api('POST', `/jobs/${id}/run`);
-  alert('Job started! Check the run history for progress.');
+  runningJobIds.add(id);
+  loadJobs();
+}
+
+async function triggerRunAll() {
+  if (!confirm('Run all active jobs sequentially?')) return;
+  const result = await api('POST', '/jobs/run-all');
+  alert(result.message || 'All jobs started!');
+  // Refresh running state after a moment
+  setTimeout(() => api('GET', '/jobs/running').then(list => {
+    runningJobIds = new Set(list.map(j => j.job_id));
+    loadJobs();
+  }), 1000);
+}
+
+async function forceStopJob(id) {
+  if (!confirm('Force stop this running job?')) return;
+  await api('POST', `/jobs/${id}/stop`);
+  runningJobIds.delete(id);
+  loadJobs();
 }
 
 async function toggleJob(id, active) {
@@ -324,6 +361,9 @@ async function loadRuns() {
     return;
   }
   wrap.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+      <button class="btn btn-sm btn-ghost" onclick="fixStuckRuns()" title="Mark runs stuck for 2+ hours as errored">🔧 Fix Stuck Runs</button>
+    </div>
     <table class="runs-table">
       <thead><tr>
         <th>Job</th><th>Started</th><th>Duration</th><th>Found</th><th>New</th><th>Deep-Dived</th><th>Re-checked</th><th>Price Δ</th><th>Sold</th><th>Error</th>
@@ -347,6 +387,12 @@ async function loadRuns() {
       </tbody>
     </table>
   `;
+}
+
+async function fixStuckRuns() {
+  const result = await api('POST', '/runs/fix-stuck');
+  alert(`Fixed ${result.fixed} stuck run(s).`);
+  loadRuns();
 }
 
 /* ─── Wizard ───────────────────────────────────────────────── */

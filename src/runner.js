@@ -55,8 +55,14 @@ function parsePostedDate(text) {
  *   Phase 2 — Re-check all active listings (price tracking + sold detection)
  *
  * Uses a single shared browser for the entire job run.
+ * @param {object} job - Job row from DB
+ * @param {object} [opts] - Options
+ * @param {AbortSignal} [opts.signal] - Abort signal for cancellation
  */
-async function runJob(job) {
+async function runJob(job, opts = {}) {
+    const signal = opts.signal || null;
+    const isAborted = () => signal && signal.aborted;
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[${job.name}] Starting scrape...`);
     console.log(`  URL: ${job.url}`);
@@ -91,9 +97,15 @@ async function runJob(job) {
         const urls = job.url.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
         let listings = [];
         for (const url of urls) {
+            if (isAborted()) { console.log(`  [${job.name}] Cancelled.`); break; }
             if (urls.length > 1) console.log(`  [URL ${urls.indexOf(url) + 1}/${urls.length}] ${url}`);
-            const results = await scrapeListings(url, knownSlugs, browser, job.max_pages || 2);
-            listings = listings.concat(results);
+            try {
+                const results = await scrapeListings(url, knownSlugs, browser, job.max_pages || 2);
+                listings = listings.concat(results);
+            } catch (urlErr) {
+                console.error(`  ✗ Failed to scrape URL: ${url} — ${urlErr.message}`);
+                // Continue to next URL instead of crashing
+            }
         }
         // Deduplicate by slug (in case same listing appears in multiple URLs)
         const seen = new Set();
@@ -101,6 +113,7 @@ async function runJob(job) {
         listingsFound = listings.length;
 
         for (const listing of listings) {
+            if (isAborted()) { console.log(`  [${job.name}] Cancelled.`); break; }
             // Skip excluded listings entirely
             if (excludedSlugs.has(listing.slug)) continue;
 
@@ -193,96 +206,102 @@ async function runJob(job) {
         }
 
         // ── Phase 2: Re-check matched active listings ──────────────
-        const activeListings = await db.query(
-            `SELECT id, slug, title, url, price_value, price_type, price, size_perches, price_per_perch
+        if (isAborted()) {
+            console.log(`  [${job.name}] Cancelled before Phase 2.`);
+        } else {
+            const activeListings = await db.query(
+                `SELECT id, slug, title, url, price_value, price_type, price, size_perches, price_per_perch
        FROM listings
        WHERE job_id = $1 AND status = 'active' AND matched_log = true
        ORDER BY id`,
-            [job.id]
-        );
+                [job.id]
+            );
 
-        if (activeListings.rows.length > 0) {
-            console.log(`\n  [Re-check] Checking ${activeListings.rows.length} active listings...`);
+            if (activeListings.rows.length > 0) {
+                console.log(`\n  [Re-check] Checking ${activeListings.rows.length} active listings...`);
 
-            for (const listing of activeListings.rows) {
-                try {
-                    await delay(config.requestDelay);
-                    const check = await checkListing(listing.url, browser);
-                    rechecked++;
+                for (const listing of activeListings.rows) {
+                    if (isAborted()) { console.log(`  [${job.name}] Cancelled.`); break; }
+                    try {
+                        await delay(config.requestDelay);
+                        const check = await checkListing(listing.url, browser);
+                        rechecked++;
 
-                    if (!check.alive) {
-                        await db.query("UPDATE listings SET status = 'sold', sold_at = COALESCE(sold_at, NOW()) WHERE id = $1", [listing.id]);
-                        soldDetected++;
-                        console.log(`    🔴 SOLD: ${listing.title || listing.slug}`);
+                        if (!check.alive) {
+                            await db.query("UPDATE listings SET status = 'sold', sold_at = COALESCE(sold_at, NOW()) WHERE id = $1", [listing.id]);
+                            soldDetected++;
+                            console.log(`    🔴 SOLD: ${listing.title || listing.slug}`);
 
-                        // Notify: sold
-                        const ns = job.notification_settings || {};
-                        if (ns.notify_sold) {
-                            notify('sold', {
-                                job_name: job.name, job_id: job.id,
-                                title: listing.title || listing.slug, url: listing.url,
-                            });
-                        }
-                        continue;
-                    }
-
-                    await db.query('UPDATE listings SET last_seen_at = NOW() WHERE id = $1', [listing.id]);
-
-                    if (check.priceValue) {
-                        await db.query(
-                            'INSERT INTO price_history (listing_id, price_value, price_type, price_text) VALUES ($1, $2, $3, $4)',
-                            [listing.id, check.priceValue, check.priceType, check.priceText]
-                        );
-
-                        // Compute normalized prices for comparison
-                        const { pricePerPerch: newPPP, totalPrice: newTP } = computeNormalizedPrices(
-                            check.priceValue, check.priceType, parseFloat(listing.size_perches) || null
-                        );
-
-                        // For land mode: compare price_per_perch; otherwise compare raw price_value
-                        const oldCompare = job.is_land_mode
-                            ? parseFloat(listing.price_per_perch)
-                            : parseFloat(listing.price_value);
-                        const newCompare = job.is_land_mode
-                            ? newPPP
-                            : check.priceValue;
-
-                        if (oldCompare && newCompare && newCompare !== oldCompare) {
-                            priceChanges++;
-                            const diff = newCompare - oldCompare;
-                            const pct = ((diff / oldCompare) * 100).toFixed(1);
-                            const arrow = diff < 0 ? '🔻' : '🔺';
-                            const label = job.is_land_mode ? '/perch' : '';
-                            console.log(`    ${arrow} PRICE CHANGE: ${listing.title || listing.slug}`);
-                            console.log(`      Rs ${oldCompare.toLocaleString()}${label} → Rs ${newCompare.toLocaleString()}${label} (${pct}%)`);
-
-                            // Notify: price drop (only drops, not increases)
-                            if (diff < 0) {
-                                const ns = job.notification_settings || {};
-                                if (ns.notify_price_drop) {
-                                    notify('price_drop', {
-                                        job_name: job.name, job_id: job.id,
-                                        title: listing.title || listing.slug, url: listing.url,
-                                        old_price: oldCompare, new_price: newCompare,
-                                        pct: parseFloat(pct), is_land_mode: job.is_land_mode || false,
-                                    });
-                                }
+                            // Notify: sold
+                            const ns = job.notification_settings || {};
+                            if (ns.notify_sold) {
+                                notify('sold', {
+                                    job_name: job.name, job_id: job.id,
+                                    title: listing.title || listing.slug, url: listing.url,
+                                });
                             }
-
-                            await db.query(
-                                `UPDATE listings SET price_value = $1, price_type = $2, price = $3,
-                                 price_per_perch = $4, total_price = $5 WHERE id = $6`,
-                                [check.priceValue, check.priceType, check.priceText, newPPP, newTP, listing.id]
-                            );
+                            continue;
                         }
+
+                        await db.query('UPDATE listings SET last_seen_at = NOW() WHERE id = $1', [listing.id]);
+
+                        if (check.priceValue) {
+                            await db.query(
+                                'INSERT INTO price_history (listing_id, price_value, price_type, price_text) VALUES ($1, $2, $3, $4)',
+                                [listing.id, check.priceValue, check.priceType, check.priceText]
+                            );
+
+                            // Compute normalized prices for comparison
+                            const { pricePerPerch: newPPP, totalPrice: newTP } = computeNormalizedPrices(
+                                check.priceValue, check.priceType, parseFloat(listing.size_perches) || null
+                            );
+
+                            // For land mode: compare price_per_perch; otherwise compare raw price_value
+                            const oldCompare = job.is_land_mode
+                                ? parseFloat(listing.price_per_perch)
+                                : parseFloat(listing.price_value);
+                            const newCompare = job.is_land_mode
+                                ? newPPP
+                                : check.priceValue;
+
+                            if (oldCompare && newCompare && newCompare !== oldCompare) {
+                                priceChanges++;
+                                const diff = newCompare - oldCompare;
+                                const pct = ((diff / oldCompare) * 100).toFixed(1);
+                                const arrow = diff < 0 ? '🔻' : '🔺';
+                                const label = job.is_land_mode ? '/perch' : '';
+                                console.log(`    ${arrow} PRICE CHANGE: ${listing.title || listing.slug}`);
+                                console.log(`      Rs ${oldCompare.toLocaleString()}${label} → Rs ${newCompare.toLocaleString()}${label} (${pct}%)`);
+
+                                // Notify: price drop (only drops, not increases)
+                                if (diff < 0) {
+                                    const ns = job.notification_settings || {};
+                                    if (ns.notify_price_drop) {
+                                        notify('price_drop', {
+                                            job_name: job.name, job_id: job.id,
+                                            title: listing.title || listing.slug, url: listing.url,
+                                            old_price: oldCompare, new_price: newCompare,
+                                            pct: parseFloat(pct), is_land_mode: job.is_land_mode || false,
+                                        });
+                                    }
+                                }
+
+                                await db.query(
+                                    `UPDATE listings SET price_value = $1, price_type = $2, price = $3,
+                                 price_per_perch = $4, total_price = $5 WHERE id = $6`,
+                                    [check.priceValue, check.priceType, check.priceText, newPPP, newTP, listing.id]
+                                );
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`    ✗ Check failed for ${listing.slug}: ${err.message}`);
                     }
-                } catch (err) {
-                    console.error(`    ✗ Check failed for ${listing.slug}: ${err.message}`);
                 }
             }
         }
 
-        console.log(`\n[${job.name}] Summary: ${listingsFound} found, ${newListings} new, ${deepDived} deep-dived, ${rechecked} re-checked, ${priceChanges} price changes, ${soldDetected} sold`);
+        const cancelNote = isAborted() ? ' (cancelled)' : '';
+        console.log(`\n[${job.name}] Summary${cancelNote}: ${listingsFound} found, ${newListings} new, ${deepDived} deep-dived, ${rechecked} re-checked, ${priceChanges} price changes, ${soldDetected} sold`);
 
         // Notify: run summary
         const ns = job.notification_settings || {};
@@ -298,9 +317,11 @@ async function runJob(job) {
         await db.query(
             `UPDATE scrape_runs SET finished_at = NOW(),
          listings_found = $1, new_listings = $2, deep_dived = $3,
-         rechecked = $4, price_changes = $5, sold_detected = $6
+         rechecked = $4, price_changes = $5, sold_detected = $6,
+         error = $8
        WHERE id = $7`,
-            [listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected, runId]
+            [listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected, runId,
+                isAborted() ? 'Cancelled by user' : null]
         );
 
         await db.query('UPDATE jobs SET last_run_at = NOW() WHERE id = $1', [job.id]);
@@ -309,7 +330,7 @@ async function runJob(job) {
         console.error(`[${job.name}] Error: ${err.message}`);
         await db.query('UPDATE scrape_runs SET finished_at = NOW(), error = $1 WHERE id = $2', [err.message, runId]);
     } finally {
-        await browser.close();
+        try { await browser.close(); } catch (_) { /* already closed */ }
     }
 
     return { listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected };

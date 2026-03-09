@@ -6,6 +6,17 @@ const { migrate } = require('./migrate');
 const { scanListPage, scanDetailPage, closeBrowser } = require('./scanner');
 const { runJob } = require('./runner');
 
+// ─── In-memory tracking for running jobs ────────────────────────
+// Map<jobId, { ac: AbortController, startedAt: Date, runId: number }>
+const runningJobs = new Map();
+
+function trackJob(jobId, ac, runId) {
+    runningJobs.set(Number(jobId), { ac, startedAt: new Date(), runId });
+}
+function untrackJob(jobId) {
+    runningJobs.delete(Number(jobId));
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -497,7 +508,11 @@ app.post('/api/jobs', async (req, res) => {
 
         // Auto-trigger first run in background
         console.log(`[Auto-Run] Triggering first run for "${job.name}"...`);
-        runJob(job).catch(err => console.error(`[Auto-Run] Error: ${err.message}`));
+        const ac = new AbortController();
+        trackJob(job.id, ac, null);
+        runJob(job, { signal: ac.signal })
+            .catch(err => console.error(`[Auto-Run] Error: ${err.message}`))
+            .finally(() => untrackJob(job.id));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -546,11 +561,91 @@ app.delete('/api/jobs/:id', async (req, res) => {
 
 app.post('/api/jobs/:id/run', async (req, res) => {
     try {
-        const jobResult = await db.query('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+        const jobId = Number(req.params.id);
+        if (runningJobs.has(jobId)) {
+            return res.json({ message: 'Job is already running', job_id: jobId });
+        }
+        const jobResult = await db.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
         if (jobResult.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
-        // Run in background, respond immediately
-        res.json({ message: 'Job started', job_id: req.params.id });
-        runJob(jobResult.rows[0]).catch(err => console.error(`Job ${req.params.id} error:`, err.message));
+        const ac = new AbortController();
+        res.json({ message: 'Job started', job_id: jobId });
+        trackJob(jobId, ac, null);
+        runJob(jobResult.rows[0], { signal: ac.signal })
+            .catch(err => console.error(`Job ${jobId} error:`, err.message))
+            .finally(() => untrackJob(jobId));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Run ALL active jobs sequentially ───────────────────────────
+
+app.post('/api/jobs/run-all', async (req, res) => {
+    try {
+        const result = await db.query('SELECT * FROM jobs WHERE active = true ORDER BY id');
+        if (result.rows.length === 0) return res.json({ message: 'No active jobs', count: 0 });
+        const count = result.rows.length;
+        res.json({ message: `Starting ${count} jobs sequentially`, count });
+        // Run sequentially in background
+        (async () => {
+            for (const job of result.rows) {
+                if (runningJobs.has(job.id)) {
+                    console.log(`[RunAll] Skipping job ${job.id} (${job.name}) — already running`);
+                    continue;
+                }
+                try {
+                    const ac = new AbortController();
+                    trackJob(job.id, ac, null);
+                    console.log(`[RunAll] Starting: ${job.name}`);
+                    await runJob(job, { signal: ac.signal });
+                } catch (err) {
+                    console.error(`[RunAll] Job ${job.id} error:`, err.message);
+                } finally {
+                    untrackJob(job.id);
+                }
+            }
+            console.log(`[RunAll] All ${count} jobs finished.`);
+        })();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Currently running jobs ─────────────────────────────────────
+
+app.get('/api/jobs/running', (req, res) => {
+    const list = [];
+    for (const [jobId, info] of runningJobs) {
+        list.push({
+            job_id: jobId,
+            started_at: info.startedAt,
+            duration_sec: Math.round((Date.now() - info.startedAt.getTime()) / 1000),
+        });
+    }
+    res.json(list);
+});
+
+// ─── Force stop a running job ───────────────────────────────────
+
+app.post('/api/jobs/:id/stop', (req, res) => {
+    const jobId = Number(req.params.id);
+    const info = runningJobs.get(jobId);
+    if (!info) return res.status(404).json({ error: 'Job is not currently running' });
+    info.ac.abort();
+    res.json({ message: 'Stop signal sent', job_id: jobId });
+});
+
+// ─── Fix stuck runs ─────────────────────────────────────────────
+
+app.post('/api/runs/fix-stuck', async (req, res) => {
+    try {
+        const result = await db.query(`
+            UPDATE scrape_runs
+            SET finished_at = NOW(), error = 'Force-closed: stuck run detected'
+            WHERE finished_at IS NULL AND started_at < NOW() - INTERVAL '2 hours'
+            RETURNING id, job_id
+        `);
+        res.json({ fixed: result.rows.length, runs: result.rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -705,7 +800,7 @@ async function start() {
     });
 }
 
-module.exports = { app, start };
+module.exports = { app, start, runningJobs, trackJob, untrackJob };
 
 if (require.main === module) {
     start().catch(err => {

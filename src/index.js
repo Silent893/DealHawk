@@ -1,7 +1,7 @@
 const db = require('./db');
 const { migrate } = require('./migrate');
 const { runJob } = require('./runner');
-const { start: startServer } = require('./server');
+const { start: startServer, runningJobs, trackJob, untrackJob } = require('./server');
 
 async function main() {
     const args = process.argv.slice(2);
@@ -56,8 +56,18 @@ function startScheduler() {
       `);
 
             for (const job of result.rows) {
+                if (runningJobs.has(job.id)) {
+                    console.log(`[Scheduler] Skipping ${job.name} — already running`);
+                    continue;
+                }
                 console.log(`[Scheduler] Running job: ${job.name}`);
-                await runJob(job);
+                const ac = new AbortController();
+                trackJob(job.id, ac, null);
+                try {
+                    await runJob(job, { signal: ac.signal });
+                } finally {
+                    untrackJob(job.id);
+                }
             }
         } catch (err) {
             console.error('[Scheduler] Error:', err.message);

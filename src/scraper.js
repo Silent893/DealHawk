@@ -5,8 +5,35 @@ const BROWSER_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 /**
+ * Navigate with retry logic — increasing timeouts on each attempt.
+ * @param {object} page - Puppeteer page
+ * @param {string} url - URL to navigate to
+ * @param {object} opts - Options
+ * @param {number} [opts.maxRetries=3] - Max attempts
+ * @param {number} [opts.baseTimeout] - Base timeout in ms (default: config.scrapeTimeout)
+ * @returns {object} Puppeteer response
+ */
+async function gotoWithRetry(page, url, opts = {}) {
+    const maxRetries = opts.maxRetries || 3;
+    const baseTimeout = opts.baseTimeout || config.scrapeTimeout;
+    let lastError;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const timeout = baseTimeout + (attempt - 1) * 15000; // 30s, 45s, 60s
+            return await page.goto(url, { waitUntil: 'networkidle2', timeout });
+        } catch (err) {
+            lastError = err;
+            if (attempt < maxRetries) {
+                console.log(`[Scraper] Retry ${attempt}/${maxRetries} for ${url} (${err.message})`);
+                await new Promise(r => setTimeout(r, 2000 * attempt)); // back off
+            }
+        }
+    }
+    throw lastError;
+}
+
+/**
  * Build a page URL by setting/replacing the page= query param.
- * Handles: /ads/gampaha/land-for-sale, ?page=1, ?sort=date&page=1, etc.
  */
 function buildPageUrl(baseUrl, pageNum) {
     const url = new URL(baseUrl);
@@ -30,7 +57,7 @@ async function getBrowser(existingBrowser) {
  */
 async function scrapePage(page, url) {
     console.log(`[Scraper] Loading: ${url}`);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: config.scrapeTimeout });
+    await gotoWithRetry(page, url);
     await page.waitForSelector('[class*="normal--"][class*="gtm-normal-ad"]', { timeout: 15000 }).catch(() => {
         console.log('[Scraper] Warning: No normal cards found within timeout');
     });

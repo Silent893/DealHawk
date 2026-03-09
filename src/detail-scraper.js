@@ -14,6 +14,28 @@ if (!fs.existsSync(IMAGES_DIR)) {
 }
 
 /**
+ * Navigate with retry logic — increasing timeouts on each attempt.
+ */
+async function gotoWithRetry(page, url, opts = {}) {
+    const maxRetries = opts.maxRetries || 2;
+    const baseTimeout = opts.baseTimeout || config.scrapeTimeout;
+    let lastError;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const timeout = baseTimeout + (attempt - 1) * 15000;
+            return await page.goto(url, { waitUntil: 'networkidle2', timeout });
+        } catch (err) {
+            lastError = err;
+            if (attempt < maxRetries) {
+                console.log(`  [Detail] Retry ${attempt}/${maxRetries} for ${url} (${err.message})`);
+                await new Promise(r => setTimeout(r, 2000 * attempt));
+            }
+        }
+    }
+    throw lastError;
+}
+
+/**
  * Deep-dive into a listing detail page to extract all available fields.
  * @param {string} url
  * @param {string} slug
@@ -30,7 +52,7 @@ async function scrapeDetail(url, slug, browser) {
         await page.setUserAgent(USER_AGENT);
 
         console.log(`  [Detail] Loading: ${url}`);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: config.scrapeTimeout });
+        await gotoWithRetry(page, url);
         await page.waitForSelector('[class*="details-section--"]', { timeout: 10000 }).catch(() => { });
 
         const detail = await page.evaluate(() => {
@@ -148,7 +170,7 @@ async function checkListing(url, browser) {
         const page = await browser.newPage();
         await page.setUserAgent(USER_AGENT);
 
-        const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: config.scrapeTimeout });
+        const response = await gotoWithRetry(page, url);
         const status = response ? response.status() : 0;
 
         if (status === 404 || status === 410 || status >= 500) {
