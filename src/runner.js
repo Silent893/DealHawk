@@ -39,19 +39,27 @@ function titleSimilarity(a, b) {
 
 /**
  * Check if a new listing is a relist of a recently-sold one.
- * Auto-links at ≥90% title similarity, suggests at ≥70%.
+ * Requires matching phone number + title similarity ≥70%.
+ * All matches are 'suggested' — user must confirm manually.
  */
 async function checkForRelist(jobId, newListingId, title, location) {
     try {
+        // Get the new listing's phone
+        const newRow = await db.query('SELECT phone FROM listings WHERE id = $1', [newListingId]);
+        const newPhone = newRow.rows[0]?.phone;
+        if (!newPhone) return; // No phone, can't match
+
+        // Find recently-sold listings with the same phone
         const result = await db.query(`
-            SELECT id, title, sub_location, seller_name, sold_at
+            SELECT id, title, phone, sold_at
             FROM listings
             WHERE job_id = $1 AND status = 'sold'
               AND sold_at > NOW() - INTERVAL '60 days'
-              AND id != $2
+              AND phone = $2
+              AND id != $3
             ORDER BY sold_at DESC
-            LIMIT 100
-        `, [jobId, newListingId]);
+            LIMIT 50
+        `, [jobId, newPhone, newListingId]);
 
         let bestMatch = null;
         let bestSim = 0;
@@ -64,25 +72,14 @@ async function checkForRelist(jobId, newListingId, title, location) {
         }
 
         if (bestMatch && bestSim >= 0.7) {
-            const confidence = bestSim >= 0.9 ? 'auto' : 'suggested';
             await db.query(
-                'UPDATE listings SET relist_of = $1, relist_confidence = $2 WHERE id = $3',
-                [bestMatch.id, confidence, newListingId]
+                "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
+                [bestMatch.id, newListingId]
             );
             const daysSinceSold = bestMatch.sold_at
                 ? Math.round((Date.now() - new Date(bestMatch.sold_at).getTime()) / 86400000)
                 : '?';
-            console.log(`    🔄 RELIST (${confidence}, ${(bestSim * 100).toFixed(0)}%): "${title}" → was sold ${daysSinceSold}d ago`);
-
-            // If auto-confirmed, merge price history from old listing
-            if (confidence === 'auto') {
-                await db.query(`
-                    INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
-                    SELECT $1, price_value, price_type, price_text, recorded_at
-                    FROM price_history WHERE listing_id = $2
-                    ON CONFLICT DO NOTHING
-                `, [newListingId, bestMatch.id]);
-            }
+            console.log(`    🔄 RELIST SUGGESTION (${(bestSim * 100).toFixed(0)}% title, phone match): "${title}" → sold ${daysSinceSold}d ago`);
         }
     } catch (err) {
         console.error(`    ⚠ Relist check error: ${err.message}`);

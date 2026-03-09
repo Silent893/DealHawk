@@ -901,7 +901,7 @@ app.post('/api/listings/:id/dismiss-relist', async (req, res) => {
 app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
     const jobId = req.params.id;
     try {
-        // Levenshtein similarity (same as runner.js)
+        // Levenshtein similarity
         function lev(a, b) {
             const m = a.length, n = b.length;
             const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
@@ -920,35 +920,40 @@ app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
             return max === 0 ? 1 : 1 - lev(na, nb) / max;
         }
 
-        // Get active listings without existing relist link
-        const active = await db.query(
-            `SELECT id, title, location FROM listings WHERE job_id = $1 AND status = 'active' AND relist_of IS NULL`,
+        // Clear all existing auto/suggested matches for this job first
+        await db.query(
+            `UPDATE listings SET relist_of = NULL, relist_confidence = NULL
+             WHERE job_id = $1 AND relist_confidence IN ('auto', 'suggested')`,
             [jobId]
         );
-        // Get sold listings from last 90 days
+
+        // Get active listings with phone
+        const active = await db.query(
+            `SELECT id, title, phone FROM listings WHERE job_id = $1 AND status = 'active' AND phone IS NOT NULL AND phone != ''`,
+            [jobId]
+        );
+        // Get sold listings with phone from last 90 days
         const sold = await db.query(
-            `SELECT id, title, sub_location, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days'`,
+            `SELECT id, title, phone, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days' AND phone IS NOT NULL AND phone != ''`,
             [jobId]
         );
 
         let matched = 0;
         for (const act of active.rows) {
+            // Only match against sold listings with the same phone number
+            const phoneSold = sold.rows.filter(s => s.phone === act.phone);
+            if (phoneSold.length === 0) continue;
+
             let bestMatch = null, bestSim = 0;
-            for (const s of sold.rows) {
+            for (const s of phoneSold) {
                 const score = sim(act.title, s.title);
                 if (score > bestSim) { bestSim = score; bestMatch = s; }
             }
             if (bestMatch && bestSim >= 0.7) {
-                const confidence = bestSim >= 0.9 ? 'auto' : 'suggested';
-                await db.query('UPDATE listings SET relist_of = $1, relist_confidence = $2 WHERE id = $3', [bestMatch.id, confidence, act.id]);
-                if (confidence === 'auto') {
-                    await db.query(`
-                        INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
-                        SELECT $1, price_value, price_type, price_text, recorded_at
-                        FROM price_history WHERE listing_id = $2
-                        ON CONFLICT DO NOTHING
-                    `, [act.id, bestMatch.id]);
-                }
+                await db.query(
+                    "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
+                    [bestMatch.id, act.id]
+                );
                 matched++;
             }
         }
