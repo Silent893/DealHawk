@@ -2007,10 +2007,12 @@ function relistCardHtml(label, r, prefix) {
     ? (r.old_sold_at ? `Sold ${new Date(r.old_sold_at).toLocaleDateString()}` : '—')
     : (r.first_seen_at ? `Listed ${new Date(r.first_seen_at).toLocaleDateString()}` : '—');
   const url = prefix === 'old' ? r.old_url : r.url;
+  const img = r[prefix + '_image'];
 
   return `
     <div style="flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:0.8rem">
       <div style="font-weight:600;margin-bottom:6px;color:${prefix === 'old' ? 'var(--danger)' : 'var(--success)'}">${label}</div>
+      ${img ? `<img src="/api/images/${img}" style="width:100%;max-height:120px;object-fit:cover;border-radius:4px;margin-bottom:6px" onerror="this.style.display='none'">` : ''}
       <div style="margin-bottom:3px"><b>${esc(title)}</b></div>
       <div style="color:var(--text-secondary)">
         💰 ${esc(price)}<br>
@@ -2025,8 +2027,10 @@ function relistCardHtml(label, r, prefix) {
 }
 
 function soldCardHtml(s) {
+  const img = s.image_path;
   return `
-    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      ${img ? `<img src="/api/images/${img}" style="width:60px;height:60px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
       <div style="flex:1;font-size:0.8rem">
         <div style="font-weight:600;margin-bottom:3px">${esc(s.title || '?')}</div>
         <div style="color:var(--text-secondary)">

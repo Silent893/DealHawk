@@ -871,6 +871,8 @@ app.post('/api/listings/:id/confirm-relist', async (req, res) => {
             return res.status(400).json({ error: 'No relist link found' });
         }
 
+        const oldId = listing.rows[0].relist_of;
+
         // Confirm the link
         await db.query(
             "UPDATE listings SET relist_confidence = 'confirmed' WHERE id = $1",
@@ -886,7 +888,13 @@ app.post('/api/listings/:id/confirm-relist', async (req, res) => {
                 SELECT 1 FROM price_history ph2
                 WHERE ph2.listing_id = $1 AND ph2.recorded_at = price_history.recorded_at
             )
-        `, [req.params.id, listing.rows[0].relist_of]);
+        `, [req.params.id, oldId]);
+
+        // Hide old listing — mark as 'merged' so it disappears from views
+        await db.query(
+            "UPDATE listings SET status = 'merged' WHERE id = $1",
+            [oldId]
+        );
 
         res.json({ success: true });
     } catch (err) {
