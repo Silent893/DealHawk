@@ -170,7 +170,7 @@ function renderListingCard(l) {
   }
 
   return `
-    <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}">
+    <div class="listing-card ${l.status === 'sold' || l.status === 'excluded' ? 'listing-sold' : ''}" data-listing-id="${l.id}">
       ${imgSrc ? `<img class="listing-card-img" src="${imgSrc}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
       <div class="listing-card-body">
         <div class="listing-card-title">
@@ -2051,7 +2051,7 @@ async function loadRelists(jobId) {
 
     const toolbar = `<div style="display:flex;gap:6px;margin-bottom:10px">
       <button class="btn btn-sm btn-ghost" onclick="backfillRelists()" style="font-size:0.78rem">🔍 Scan for Relists</button>
-      <button class="btn btn-sm btn-ghost" onclick="openManualLinkPicker()" style="font-size:0.78rem">🔗 Manual Link</button>
+      <button class="btn btn-sm btn-ghost" onclick="toggleLinkMode()" style="font-size:0.78rem">🔗 Manual Link</button>
     </div>`;
 
     if (!relists || relists.length === 0) {
@@ -2120,54 +2120,93 @@ async function backfillRelists() {
   }
 }
 
-async function openManualLinkPicker() {
-  if (!currentJobId) return;
-  // Ask for listing ID to link
-  const listingId = prompt('Enter the ID of the ACTIVE listing you want to link (find in card footer):');
-  if (!listingId) return;
-  _manualLinkTarget = listingId;
+let _linkMode = false;
+let _linkSelections = [];
 
-  // Load sold listings
-  try {
-    const sold = await api('GET', `/jobs/${currentJobId}/sold-listings`);
-    if (!sold || sold.length === 0) { alert('No sold listings found'); return; }
-
+function toggleLinkMode() {
+  _linkMode = !_linkMode;
+  _linkSelections = [];
+  const banner = document.getElementById('link-mode-banner');
+  if (_linkMode) {
     const panel = document.getElementById('relist-panel');
-    const existing = panel.innerHTML;
-    panel.innerHTML = `
-      <div style="background:rgba(239,68,68,0.08);border:1px solid var(--danger);border-radius:var(--radius);padding:16px;margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <h4 style="margin:0;color:var(--danger)">🔗 Pick sold listing to link with #${esc(listingId)}</h4>
-          <button class="btn btn-sm btn-ghost" onclick="loadRelists(currentJobId)">✕ Cancel</button>
+    if (!banner) {
+      const b = document.createElement('div');
+      b.id = 'link-mode-banner';
+      b.style.cssText = 'background:rgba(99,102,241,0.15);border:2px solid var(--accent);border-radius:var(--radius);padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center';
+      b.innerHTML = `
+        <div>
+          <b style="color:var(--accent)">🔗 Link Mode Active</b>
+          <span style="font-size:0.82rem;color:var(--text-secondary)"> — Click any 2 listing cards to link them. First = old, Second = new (relist).</span>
+          <span id="link-mode-status" style="font-size:0.82rem;font-weight:600;color:var(--accent)"> (0/2 selected)</span>
         </div>
-        <input id="manual-link-search" type="text" placeholder="Filter by title, phone, seller..."
-               oninput="filterManualLink()" class="form-input" style="margin-bottom:10px;width:100%">
-        <div id="manual-link-list" style="max-height:400px;overflow-y:auto">
-          ${sold.map(s => soldCardHtml(s)).join('')}
-        </div>
-      </div>
-    `;
-    window._soldListingsCache = sold;
-  } catch (err) { alert('Error: ' + err.message); }
+        <button class="btn btn-sm btn-ghost" onclick="toggleLinkMode()">✕ Cancel</button>
+      `;
+      panel.parentElement.insertBefore(b, panel);
+    }
+    // Add click listeners to listing cards
+    document.querySelectorAll('.listing-card').forEach(card => {
+      card.style.cursor = 'pointer';
+      card.addEventListener('click', handleLinkClick);
+    });
+  } else {
+    if (banner) banner.remove();
+    document.querySelectorAll('.listing-card').forEach(card => {
+      card.style.cursor = '';
+      card.style.outline = '';
+      card.removeEventListener('click', handleLinkClick);
+    });
+  }
 }
 
-function filterManualLink() {
-  const q = (document.getElementById('manual-link-search')?.value || '').toLowerCase();
-  const sold = window._soldListingsCache || [];
-  const filtered = sold.filter(s =>
-    (s.title || '').toLowerCase().includes(q) ||
-    (s.phone || '').includes(q) ||
-    (s.seller_name || '').toLowerCase().includes(q)
-  );
-  document.getElementById('manual-link-list').innerHTML = filtered.map(s => soldCardHtml(s)).join('') ||
-    '<div style="color:var(--text-muted);padding:12px;text-align:center">No matches</div>';
+function handleLinkClick(e) {
+  if (!_linkMode) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const card = e.currentTarget;
+  const id = card.dataset.listingId;
+  if (!id) return;
+
+  // Already selected? Deselect
+  const idx = _linkSelections.indexOf(id);
+  if (idx >= 0) {
+    _linkSelections.splice(idx, 1);
+    card.style.outline = '';
+    updateLinkStatus();
+    return;
+  }
+
+  if (_linkSelections.length >= 2) return; // Max 2
+
+  _linkSelections.push(id);
+  card.style.outline = _linkSelections.length === 1
+    ? '3px solid var(--danger)' // First = old (red)
+    : '3px solid var(--success)'; // Second = new (green)
+
+  updateLinkStatus();
+
+  if (_linkSelections.length === 2) {
+    const oldId = _linkSelections[0];
+    const newId = _linkSelections[1];
+    if (confirm(`Link listing #${newId} as a relist of #${oldId}?\n\nFirst (red) = old listing\nSecond (green) = new listing (relist)`)) {
+      performManualLink(oldId, newId);
+    } else {
+      // Reset selections
+      document.querySelectorAll('.listing-card').forEach(c => c.style.outline = '');
+      _linkSelections = [];
+      updateLinkStatus();
+    }
+  }
 }
 
-async function manualLink(soldId) {
-  if (!_manualLinkTarget) return;
+function updateLinkStatus() {
+  const el = document.getElementById('link-mode-status');
+  if (el) el.textContent = ` (${_linkSelections.length}/2 selected)`;
+}
+
+async function performManualLink(oldId, newId) {
   try {
-    await api('POST', `/listings/${_manualLinkTarget}/link-relist`, { sold_id: soldId });
-    _manualLinkTarget = null;
+    await api('POST', `/listings/${newId}/link-relist`, { sold_id: parseInt(oldId) });
+    toggleLinkMode();
     loadRelists(currentJobId);
   } catch (err) { alert('Error: ' + err.message); }
 }

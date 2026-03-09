@@ -500,12 +500,12 @@ app.get('/api/jobs', async (req, res) => {
     try {
         const result = await db.query(`
       SELECT j.*,
-        (SELECT COUNT(*) FROM listings WHERE job_id = j.id) AS listing_count,
-        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND matched_log = true) AS matched_count,
+        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status != 'merged') AS listing_count,
+        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND matched_log = true AND status != 'merged') AS matched_count,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'active') AS active_count,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold') AS sold_count,
         (SELECT ROUND(AVG(CASE WHEN j.is_land_mode THEN price_per_perch ELSE price_value END)) FROM listings WHERE job_id = j.id AND matched_log = true AND status = 'active' AND price_value IS NOT NULL) AS avg_price,
-        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND first_seen_at > NOW() - INTERVAL '7 days') AS new_7d,
+        (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND first_seen_at > NOW() - INTERVAL '7 days' AND status != 'merged') AS new_7d,
         (SELECT COUNT(*) FROM listings WHERE job_id = j.id AND status = 'sold' AND sold_at > NOW() - INTERVAL '7 days') AS sold_7d,
         (SELECT COUNT(*) FROM (
           SELECT ph.listing_id FROM price_history ph
@@ -727,6 +727,7 @@ app.get('/api/listings', async (req, res) => {
 
         if (job_id) { where.push(`job_id = $${idx++}`); params.push(job_id); }
         if (matched_only === 'true') { where.push(`matched_log = true`); }
+        where.push(`l.status != 'merged'`);
         if (status) { where.push(`l.status = $${idx++}`); params.push(status); }
         if (search) { where.push(`l.title ILIKE $${idx++}`); params.push(`%${search}%`); }
 
