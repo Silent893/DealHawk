@@ -85,11 +85,14 @@ app.get('/api/stats', async (req, res) => {
             (SELECT COUNT(*) FROM listings WHERE status = 'sold') AS sold_listings,
             (SELECT COUNT(*) FROM listings WHERE matched_log = true AND status != 'merged') AS matched_listings,
             (SELECT COUNT(*) FROM jobs WHERE active = true) AS active_jobs,
-            (SELECT COUNT(DISTINCT ph.listing_id) FROM price_history ph
-              JOIN price_history ph2 ON ph.listing_id = ph2.listing_id AND ph2.id != ph.id
-              WHERE ph.recorded_at > NOW() - INTERVAL '24 hours'
-              AND ph.price_value < ph2.price_value
-              AND ph2.recorded_at < ph.recorded_at
+            (SELECT COUNT(DISTINCT listing_id) FROM (
+              SELECT listing_id, price_value,
+                LAG(price_value) OVER (PARTITION BY listing_id ORDER BY recorded_at) AS prev_price
+              FROM price_history
+              WHERE recorded_at > NOW() - INTERVAL '48 hours'
+            ) sub
+            WHERE prev_price IS NOT NULL AND price_value < prev_price
+              AND listing_id IN (SELECT id FROM listings WHERE status = 'active')
             ) AS price_drops_24h
         `);
         res.json(result.rows[0]);
@@ -559,7 +562,7 @@ app.post('/api/jobs', async (req, res) => {
 
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, url, category, deep_dive_rules, log_rules, frequency_hours, active, is_land_mode, notification_settings } = req.body;
+    const { name, url, category, deep_dive_rules, log_rules, frequency_hours, active, is_land_mode, max_pages, notification_settings } = req.body;
     try {
         const result = await db.query(
             `UPDATE jobs SET
@@ -571,13 +574,15 @@ app.put('/api/jobs/:id', async (req, res) => {
          frequency_hours = COALESCE($6, frequency_hours),
          active = COALESCE($7, active),
          is_land_mode = COALESCE($8, is_land_mode),
-         notification_settings = COALESCE($9, notification_settings)
-       WHERE id = $10 RETURNING *`,
+         notification_settings = COALESCE($9, notification_settings),
+         max_pages = COALESCE($10, max_pages)
+       WHERE id = $11 RETURNING *`,
             [name, url, category,
                 deep_dive_rules ? JSON.stringify(deep_dive_rules) : null,
                 log_rules ? JSON.stringify(log_rules) : null,
                 frequency_hours, active, is_land_mode,
-                notification_settings ? JSON.stringify(notification_settings) : null, id]
+                notification_settings ? JSON.stringify(notification_settings) : null,
+                max_pages, id]
         );
         if (result.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
         res.json(result.rows[0]);
@@ -767,31 +772,7 @@ app.get('/api/listings', async (req, res) => {
     }
 });
 
-// ─── Job Analytics ─────────────────────────────────────────────
-
-app.get('/api/jobs/:id/analytics', async (req, res) => {
-    try {
-        const jobResult2 = await db.query('SELECT is_land_mode FROM jobs WHERE id = $1', [req.params.id]);
-        const isLandMode2 = jobResult2.rows[0]?.is_land_mode || false;
-        const pCol2 = isLandMode2 ? 'price_per_perch' : 'price_value';
-
-        const result = await db.query(`
-          SELECT
-            COUNT(*) FILTER (WHERE status = 'active') AS active_count,
-            COUNT(*) FILTER (WHERE status = 'sold') AS sold_count,
-            COUNT(*) FILTER (WHERE matched_log = true AND status != 'merged') AS matched_count,
-            ROUND(AVG(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active')) AS avg_price,
-            MIN(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS min_price,
-            MAX(${pCol2}) FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS max_price,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${pCol2})
-              FILTER (WHERE ${pCol2} IS NOT NULL AND status = 'active') AS median_price
-          FROM listings WHERE job_id = $1
-        `, [req.params.id]);
-        res.json(result.rows[0]);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
+// (Duplicate analytics route removed — the primary one is at /api/jobs/:id/analytics above)
 
 // ─── Scrape runs ────────────────────────────────────────────────
 
@@ -918,21 +899,21 @@ app.post('/api/listings/:id/dismiss-relist', async (req, res) => {
 app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
     const jobId = req.params.id;
     try {
-        // Clear all existing suggested matches first
+        // Clear all existing suggested matches first (but keep dismissed)
         await db.query(
             `UPDATE listings SET relist_of = NULL, relist_confidence = NULL
              WHERE job_id = $1 AND relist_confidence IN ('auto', 'suggested')`,
             [jobId]
         );
 
-        // Get active listings with phone
+        // Get active listings with phone (include title + confidence for filtering)
         const active = await db.query(
-            `SELECT id, phone FROM listings WHERE job_id = $1 AND status = 'active' AND phone IS NOT NULL AND phone != ''`,
+            `SELECT id, phone, title, relist_confidence FROM listings WHERE job_id = $1 AND status = 'active' AND phone IS NOT NULL AND phone != ''`,
             [jobId]
         );
         // Get sold listings with phone from last 90 days
         const sold = await db.query(
-            `SELECT id, phone, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days' AND phone IS NOT NULL AND phone != ''`,
+            `SELECT id, phone, title, sold_at FROM listings WHERE job_id = $1 AND status = 'sold' AND sold_at > NOW() - INTERVAL '90 days' AND phone IS NOT NULL AND phone != ''`,
             [jobId]
         );
 
@@ -943,17 +924,87 @@ app.post('/api/jobs/:id/backfill-relists', async (req, res) => {
             phoneMap[s.phone].push(s);
         }
 
+        // Title similarity helper (Levenshtein-based)
+        function levenshtein(a, b) {
+            const m = a.length, n = b.length;
+            const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+            for (let i = 0; i <= m; i++) dp[i][0] = i;
+            for (let j = 0; j <= n; j++) dp[0][j] = j;
+            for (let i = 1; i <= m; i++) {
+                for (let j = 1; j <= n; j++) {
+                    dp[i][j] = a[i - 1] === b[j - 1]
+                        ? dp[i - 1][j - 1]
+                        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+                }
+            }
+            return dp[m][n];
+        }
+        function titleSim(a, b) {
+            if (!a || !b) return 0;
+            const na = a.toLowerCase().trim(), nb = b.toLowerCase().trim();
+            if (na === nb) return 1;
+            const maxLen = Math.max(na.length, nb.length);
+            return maxLen === 0 ? 1 : 1 - levenshtein(na, nb) / maxLen;
+        }
+        function extractYear(text) {
+            if (!text) return null;
+            const match = text.match(/\b(20\d{2})\b/);
+            return match ? parseInt(match[1]) : null;
+        }
+
         let matched = 0;
+        let autoConfirmed = 0;
         for (const act of active.rows) {
+            // Skip dismissed relists
+            if (act.relist_confidence === 'dismissed') continue;
+
             const candidates = phoneMap[act.phone];
             if (!candidates || candidates.length === 0) continue;
-            // Link to the most recently sold one
-            const best = candidates.sort((a, b) => new Date(b.sold_at) - new Date(a.sold_at))[0];
-            await db.query(
-                "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
-                [best.id, act.id]
-            );
-            matched++;
+
+            // Sort by most recently sold
+            candidates.sort((a, b) => new Date(b.sold_at) - new Date(a.sold_at));
+
+            for (const sold of candidates) {
+                // Title similarity ≥60%
+                const sim = titleSim(act.title, sold.title);
+                if (sim < 0.6) continue;
+
+                // Year match: if both have years, they must match
+                const newYear = extractYear(act.title);
+                const oldYear = extractYear(sold.title);
+                if (newYear && oldYear && newYear !== oldYear) continue;
+
+                const yearOk = !newYear || !oldYear || newYear === oldYear;
+                if (sim >= 0.9 && yearOk) {
+                    // Auto-confirm: merge price history + hide old listing
+                    await db.query(
+                        "UPDATE listings SET relist_of = $1, relist_confidence = 'confirmed' WHERE id = $2",
+                        [sold.id, act.id]
+                    );
+                    await db.query(`
+                        INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
+                        SELECT $1, price_value, price_type, price_text, recorded_at
+                        FROM price_history WHERE listing_id = $2
+                        AND NOT EXISTS (
+                            SELECT 1 FROM price_history ph2
+                            WHERE ph2.listing_id = $1 AND ph2.recorded_at = price_history.recorded_at
+                        )
+                    `, [act.id, sold.id]);
+                    await db.query(
+                        "UPDATE listings SET status = 'merged' WHERE id = $1",
+                        [sold.id]
+                    );
+                    autoConfirmed++;
+                } else {
+                    // Suggest for manual review
+                    await db.query(
+                        "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
+                        [sold.id, act.id]
+                    );
+                }
+                matched++;
+                break; // first good match wins
+            }
         }
         res.json({ success: true, matched, scanned: active.rows.length });
     } catch (err) {

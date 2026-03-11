@@ -133,18 +133,19 @@ async function scrapeDetail(url, slug, browser) {
 /**
  * Download an image from a URL and save it to the images directory.
  */
-function downloadImage(imageUrl, slug) {
+function downloadImage(imageUrl, slug, maxRedirects = 5) {
     return new Promise((resolve, reject) => {
         const safeName = slug.replace(/[^a-zA-Z0-9-]/g, '_').substring(0, 100);
         const filename = `${safeName}.jpg`;
         const filepath = path.join(IMAGES_DIR, filename);
 
         if (fs.existsSync(filepath)) return resolve(filename);
+        if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
 
         const client = imageUrl.startsWith('https') ? https : http;
         client.get(imageUrl, (res) => {
             if (res.statusCode === 301 || res.statusCode === 302) {
-                return downloadImage(res.headers.location, slug).then(resolve).catch(reject);
+                return downloadImage(res.headers.location, slug, maxRedirects - 1).then(resolve).catch(reject);
             }
             if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
             const stream = fs.createWriteStream(filepath);

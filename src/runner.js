@@ -38,14 +38,30 @@ function titleSimilarity(a, b) {
 }
 
 /**
+ * Extract a 4-digit year (2000-2099) from a string, typically a title.
+ * Returns the year as a number, or null if none found.
+ */
+function extractYear(text) {
+    if (!text) return null;
+    const match = text.match(/\b(20\d{2})\b/);
+    return match ? parseInt(match[1]) : null;
+}
+
+/**
  * Check if a new listing is a relist of a recently-sold one.
- * Matches by phone number only — all matches are 'suggested'.
+ * Requires: phone match + ≥60% title similarity + matching manufacture year.
+ * Auto-confirms (merges) when title ≥90% + year match.
+ * Respects 'dismissed' status — won't re-suggest dismissed relists.
  */
 async function checkForRelist(jobId, newListingId) {
     try {
-        const newRow = await db.query('SELECT phone FROM listings WHERE id = $1', [newListingId]);
-        const newPhone = newRow.rows[0]?.phone;
-        if (!newPhone) return;
+        const newRow = await db.query(
+            'SELECT phone, title, relist_confidence FROM listings WHERE id = $1',
+            [newListingId]
+        );
+        const { phone, title, relist_confidence } = newRow.rows[0] || {};
+        if (!phone) return;
+        if (relist_confidence === 'dismissed') return; // respect dismissal
 
         // Find recently-sold listings with the same phone
         const result = await db.query(`
@@ -56,19 +72,54 @@ async function checkForRelist(jobId, newListingId) {
               AND phone = $2
               AND id != $3
             ORDER BY sold_at DESC
-            LIMIT 1
-        `, [jobId, newPhone, newListingId]);
+            LIMIT 5
+        `, [jobId, phone, newListingId]);
 
-        if (result.rows.length > 0) {
-            const sold = result.rows[0];
-            await db.query(
-                "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
-                [sold.id, newListingId]
-            );
+        for (const sold of result.rows) {
+            // Title similarity check (≥60%)
+            const sim = titleSimilarity(title, sold.title);
+            if (sim < 0.6) continue;
+
+            // Year-of-manufacture match: if both titles have a year, they must match
+            const newYear = extractYear(title);
+            const oldYear = extractYear(sold.title);
+            if (newYear && oldYear && newYear !== oldYear) continue;
+
             const daysSinceSold = sold.sold_at
                 ? Math.round((Date.now() - new Date(sold.sold_at).getTime()) / 86400000)
                 : '?';
-            console.log(`    🔄 RELIST SUGGESTION (phone match): sold ${daysSinceSold}d ago`);
+
+            // Auto-confirm if title ≥90% AND year matches (or neither has year)
+            const yearOk = !newYear || !oldYear || newYear === oldYear;
+            if (sim >= 0.9 && yearOk) {
+                // Auto-confirm: merge price history + hide old listing
+                await db.query(
+                    "UPDATE listings SET relist_of = $1, relist_confidence = 'confirmed' WHERE id = $2",
+                    [sold.id, newListingId]
+                );
+                await db.query(`
+                    INSERT INTO price_history (listing_id, price_value, price_type, price_text, recorded_at)
+                    SELECT $1, price_value, price_type, price_text, recorded_at
+                    FROM price_history WHERE listing_id = $2
+                    AND NOT EXISTS (
+                        SELECT 1 FROM price_history ph2
+                        WHERE ph2.listing_id = $1 AND ph2.recorded_at = price_history.recorded_at
+                    )
+                `, [newListingId, sold.id]);
+                await db.query(
+                    "UPDATE listings SET status = 'merged' WHERE id = $1",
+                    [sold.id]
+                );
+                console.log(`    🔄 AUTO-RELIST (${(sim * 100).toFixed(0)}% match): merged with sold ${daysSinceSold}d ago`);
+            } else {
+                // Suggest for manual review
+                await db.query(
+                    "UPDATE listings SET relist_of = $1, relist_confidence = 'suggested' WHERE id = $2",
+                    [sold.id, newListingId]
+                );
+                console.log(`    🔄 RELIST SUGGESTION (${(sim * 100).toFixed(0)}% match): sold ${daysSinceSold}d ago`);
+            }
+            return; // first good match wins
         }
     } catch (err) {
         console.error(`    ⚠ Relist check error: ${err.message}`);
@@ -223,9 +274,6 @@ async function runJob(job, opts = {}) {
                     );
                 }
 
-                // Check for relist (phone match against recently-sold)
-                await checkForRelist(job.id, row.id);
-
                 // Check deep-dive rules
                 if (matchesRules(listing, job.deep_dive_rules)) {
                     try {
@@ -252,6 +300,10 @@ async function runJob(job, opts = {}) {
                                 postedAt, detail.subLocation || null,
                             ]
                         );
+
+                        // Check for relist AFTER deep-dive (phone is now available)
+                        await checkForRelist(job.id, row.id);
+
                         deepDived++;
                         if (matchedLog) {
                             console.log(`    ✅ Matched log rules`);

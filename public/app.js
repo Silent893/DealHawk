@@ -422,6 +422,8 @@ async function editJob(id) {
     name: job.name,
     category: job.category || '',
     frequency: job.frequency_hours,
+    max_pages: job.max_pages || 2,
+    is_land_mode: job.is_land_mode || false,
     card_fields: job.card_fields || [],
     detail_fields: job.detail_fields || [],
     deep_dive_rules: job.deep_dive_rules || [],
@@ -615,11 +617,10 @@ function renderSaveStep(body) {
       .map(([v, l]) => `<option value="${v}" ${parseInt(v) === freq ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
-    ${!wizardEditId ? `
     <div class="form-group">
       <label class="form-label">Max Pages to Scan</label>
       <input class="form-input" id="wiz-max-pages" type="number" min="1" max="10" value="${wizardData.max_pages || 2}" style="max-width:120px">
-      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Scans deeper when new listings are found, stops when all are already known. Job auto-runs after creation.</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Scans deeper when new listings are found, stops when all are already known.</div>
     </div>
     <div class="form-group">
       <label class="checkbox-label" style="cursor:pointer">
@@ -628,7 +629,6 @@ function renderSaveStep(body) {
       </label>
       <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">All stats and charts will use price/perch instead of total price.</div>
     </div>
-    ` : ''}
     <div class="form-group">
       <label class="form-label">🔔 Notifications</label>
       <div style="display:flex;flex-direction:column;gap:6px">
@@ -772,6 +772,8 @@ async function wizardNext() {
 
       if (wizardEditId) {
         // Update existing job
+        const maxPages = parseInt(document.getElementById('wiz-max-pages')?.value) || 2;
+        const isLandMode = document.getElementById('wiz-land-mode')?.checked || false;
         await api('PUT', `/jobs/${wizardEditId}`, {
           name,
           url: wizardData.url,
@@ -779,6 +781,8 @@ async function wizardNext() {
           deep_dive_rules: wizardData.deep_dive_rules,
           log_rules: wizardData.log_rules,
           frequency_hours: frequency,
+          max_pages: maxPages,
+          is_land_mode: isLandMode,
           notification_settings: notifSettings,
         });
       } else {

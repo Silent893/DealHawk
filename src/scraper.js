@@ -34,11 +34,15 @@ async function gotoWithRetry(page, url, opts = {}) {
 
 /**
  * Build a page URL by setting/replacing the page= query param.
+ * Uses string replacement instead of URL API to preserve original encoding
+ * (e.g. commas in enum.body=hatchback,saloon,coupe-sports).
  */
 function buildPageUrl(baseUrl, pageNum) {
-    const url = new URL(baseUrl);
-    url.searchParams.set('page', pageNum);
-    return url.toString();
+    if (/[?&]page=\d+/.test(baseUrl)) {
+        return baseUrl.replace(/([?&]page=)\d+/, `$1${pageNum}`);
+    }
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${separator}page=${pageNum}`;
 }
 
 /**
@@ -148,6 +152,7 @@ async function scrapeListings(baseUrl, knownSlugs, browser, maxPages = 2) {
         await page.setUserAgent(USER_AGENT);
 
         let allListings = [];
+        let consecutiveKnown = 0;
 
         for (let p = 1; p <= maxPages; p++) {
             const pageUrl = p === 1 ? baseUrl : buildPageUrl(baseUrl, p);
@@ -163,11 +168,17 @@ async function scrapeListings(baseUrl, knownSlugs, browser, maxPages = 2) {
             if (knownSlugs && knownSlugs.size > 0) {
                 const allKnown = pageListings.every(l => knownSlugs.has(l.slug));
                 if (allKnown) {
-                    console.log(`[Scraper] All page ${p} listings are known — stopping`);
-                    break;
+                    consecutiveKnown++;
+                    if (consecutiveKnown >= 2) {
+                        console.log(`[Scraper] ${consecutiveKnown} consecutive known pages — stopping`);
+                        break;
+                    }
+                    console.log(`[Scraper] All page ${p} known, checking next page...`);
+                } else {
+                    consecutiveKnown = 0;
+                    const newCount = pageListings.filter(l => !knownSlugs.has(l.slug)).length;
+                    console.log(`[Scraper] ${newCount} new on page ${p} — continuing...`);
                 }
-                const newCount = pageListings.filter(l => !knownSlugs.has(l.slug)).length;
-                console.log(`[Scraper] ${newCount} new on page ${p} — continuing...`);
             }
             // No known slugs (first run) → keep going up to maxPages
         }
