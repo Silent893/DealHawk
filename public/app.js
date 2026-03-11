@@ -968,7 +968,7 @@ async function loadJobDetail(id) {
     // Save original analytics for restore after group selection
     window._originalJobAnalytics = analytics;
     window._isLandMode = analytics.isLandMode || false;
-    activeGroupKey = null;
+    activeGroupKeys = new Set();
 
     renderJobStats(analytics);
     renderPriceChart(history);
@@ -1623,7 +1623,7 @@ async function loadJobGroups() {
   }
 }
 
-let activeGroupKey = null;
+let activeGroupKeys = new Set();
 let currentGroups = [];
 
 function renderJobGroups(groups) {
@@ -1634,17 +1634,18 @@ function renderJobGroups(groups) {
     return;
   }
 
-  // Show all button if a group is selected
-  const showAllBtn = activeGroupKey
+  // Show all button if any group is selected
+  const selectedKeys = [...activeGroupKeys];
+  const showAllBtn = selectedKeys.length > 0
     ? `<div style="margin-bottom:12px">
         <button class="btn btn-sm btn-ghost" onclick="clearGroupSelection()" style="color:var(--accent)">← Show All Listings</button>
-        <span style="font-size:0.85rem;color:var(--text-secondary);margin-left:8px">Filtered by: <strong>${esc(activeGroupKey)}</strong></span>
+        <span style="font-size:0.85rem;color:var(--text-secondary);margin-left:8px">Filtered by: <strong>${selectedKeys.map(k => esc(k)).join(' + ')}</strong></span>
        </div>`
     : '';
 
   grid.innerHTML = showAllBtn + `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">` +
     groups.map(g => {
-      const isActive = activeGroupKey === g.group_key;
+      const isActive = activeGroupKeys.has(g.group_key);
       const borderStyle = isActive ? 'border-color:var(--accent);box-shadow:0 0 12px rgba(99,102,241,0.3)' : '';
       return `
       <div class="job-card" style="padding:14px;cursor:pointer;${borderStyle}" onclick="selectGroup('${esc(String(g.group_key || ''))}')">
@@ -1671,16 +1672,26 @@ function renderJobGroups(groups) {
 }
 
 function selectGroup(key) {
-  activeGroupKey = activeGroupKey === key ? null : key;
+  if (activeGroupKeys.has(key)) {
+    activeGroupKeys.delete(key);
+  } else {
+    activeGroupKeys.add(key);
+  }
   renderJobGroups(currentGroups);
 
-  if (activeGroupKey) {
-    const group = currentGroups.find(g => g.group_key === activeGroupKey);
-    if (group && group.listing_ids && group.listing_ids.length > 0) {
-      filterListingsByIds(group.listing_ids, activeGroupKey);
-    } else {
-      loadJobListingsFiltered();
+  if (activeGroupKeys.size > 0) {
+    // Combine listing IDs from all selected groups
+    const combinedIds = [];
+    const labels = [];
+    for (const k of activeGroupKeys) {
+      const group = currentGroups.find(g => g.group_key === k);
+      if (group && group.listing_ids) {
+        combinedIds.push(...group.listing_ids);
+        labels.push(k);
+      }
     }
+    const uniqueIds = [...new Set(combinedIds)];
+    filterListingsByIds(uniqueIds, labels.join(' + '));
   } else {
     // Restore original job stats
     if (window._originalJobAnalytics) renderJobStats(window._originalJobAnalytics);
@@ -1706,11 +1717,11 @@ async function filterListingsByIds(ids, groupLabel) {
   // Show listings in the grid
   renderJobListings(groupListings);
   document.getElementById('job-listings-pagination').innerHTML =
-    `<span style="color:var(--text-muted);font-size:0.85rem">${groupListings.length} listings in group "${esc(groupLabel)}"</span>`;
+    `<span style="color:var(--text-muted);font-size:0.85rem">${groupListings.length} listings in "${esc(groupLabel)}"</span>`;
 }
 
 function clearGroupSelection() {
-  activeGroupKey = null;
+  activeGroupKeys.clear();
   renderJobGroups(currentGroups);
   if (window._originalJobAnalytics) renderJobStats(window._originalJobAnalytics);
   loadJobListingsFiltered();

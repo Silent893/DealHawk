@@ -354,14 +354,41 @@ app.get('/api/jobs/:id/groups', async (req, res) => {
               AND detail_fields IS NOT NULL AND price_value IS NOT NULL
         `, [jobId]);
 
+        // Smart bucketing: detect field type and round numeric values
+        const fieldLower = field.toLowerCase();
+        const isCC = /engine|capacity|cc|displacement/i.test(fieldLower);
+        const isMileage = /mileage|km|kilo|odometer|distance/i.test(fieldLower);
+
+        function bucketKey(rawValue) {
+            const str = String(rawValue).trim();
+            const numMatch = str.match(/([\d,]+)/);
+            if (!numMatch) return str;
+            const num = parseFloat(numMatch[1].replace(/,/g, ''));
+            if (isNaN(num)) return str;
+
+            if (isCC) {
+                // Round to nearest 100: 1498→1500
+                const rounded = Math.round(num / 100) * 100;
+                return `${rounded} cc`;
+            }
+            if (isMileage) {
+                // Round to nearest 10,000: 45000→50000
+                const rounded = Math.round(num / 10000) * 10000;
+                if (rounded === 0) return '< 10,000 km';
+                return `${(rounded - 10000).toLocaleString()}–${rounded.toLocaleString()} km`;
+            }
+            return str; // No bucketing for other fields
+        }
+
         // Group in JS to handle both text and JSONB detail_fields
         const groups = {};
         for (const row of result.rows) {
             let df = row.detail_fields;
             if (typeof df === 'string') try { df = JSON.parse(df); } catch { continue; }
             if (!df) continue;
-            const key = String(df[field] || '').trim();
-            if (!key) continue;
+            const rawVal = String(df[field] || '').trim();
+            if (!rawVal) continue;
+            const key = bucketKey(rawVal);
             if (!groups[key]) groups[key] = { count: 0, sum: 0, min: Infinity, max: 0, ids: [] };
             const price = isLandMode ? parseFloat(row.price_per_perch || row.price_value) : parseFloat(row.price_value);
             groups[key].count++;
@@ -380,7 +407,13 @@ app.get('/api/jobs/:id/groups', async (req, res) => {
                 max_price: g.max,
                 listing_ids: g.ids,
             }))
-            .sort((a, b) => b.count - a.count);
+            .sort((a, b) => {
+                // Sort by the numeric start of the key if possible, else by count
+                const aNum = parseFloat(a.group_key.replace(/[^0-9.]/g, ''));
+                const bNum = parseFloat(b.group_key.replace(/[^0-9.]/g, ''));
+                if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
+                return b.count - a.count;
+            });
 
         res.json(out);
     } catch (err) {
