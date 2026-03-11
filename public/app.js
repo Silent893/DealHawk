@@ -424,6 +424,7 @@ async function editJob(id) {
     frequency: job.frequency_hours,
     max_pages: job.max_pages || 2,
     is_land_mode: job.is_land_mode || false,
+    notification_settings: job.notification_settings || {},
     card_fields: job.card_fields || [],
     detail_fields: job.detail_fields || [],
     deep_dive_rules: job.deep_dive_rules || [],
@@ -633,16 +634,16 @@ function renderSaveStep(body) {
       <label class="form-label">🔔 Notifications</label>
       <div style="display:flex;flex-direction:column;gap:6px">
         <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
-          <input type="checkbox" id="wiz-notify-new" checked> 🆕 New listings found
+          <input type="checkbox" id="wiz-notify-new" ${(wizardData.notification_settings?.notify_new !== false) ? 'checked' : ''}> 🆕 New listings found
         </label>
         <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
-          <input type="checkbox" id="wiz-notify-price-drop" checked> 🔻 Price drops detected
+          <input type="checkbox" id="wiz-notify-price-drop" ${(wizardData.notification_settings?.notify_price_drop !== false) ? 'checked' : ''}> 🔻 Price drops detected
         </label>
         <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
-          <input type="checkbox" id="wiz-notify-sold"> 🔴 Listings sold
+          <input type="checkbox" id="wiz-notify-sold" ${wizardData.notification_settings?.notify_sold ? 'checked' : ''}> 🔴 Listings sold
         </label>
         <label class="checkbox-label" style="cursor:pointer;font-size:0.85rem">
-          <input type="checkbox" id="wiz-notify-summary" checked> 📊 Run summary
+          <input type="checkbox" id="wiz-notify-summary" ${(wizardData.notification_settings?.notify_summary !== false) ? 'checked' : ''}> 📊 Run summary
         </label>
       </div>
       <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Sends notifications to Home Assistant when enabled.</div>
