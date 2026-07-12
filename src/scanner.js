@@ -1,5 +1,5 @@
-const puppeteer = require('puppeteer');
 const config = require('./config');
+const { launchBrowser } = require('./browser');
 
 /**
  * Get a shared browser instance for scanning operations.
@@ -8,10 +8,7 @@ const config = require('./config');
 let _browser = null;
 async function getBrowser() {
     if (!_browser || !_browser.connected) {
-        _browser = await puppeteer.launch({
-            headless: config.headless ? 'new' : false,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-        });
+        _browser = await launchBrowser();
     }
     return _browser;
 }

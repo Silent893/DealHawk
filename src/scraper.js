@@ -1,8 +1,5 @@
-const puppeteer = require('puppeteer');
 const config = require('./config');
-
-const BROWSER_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const { launchBrowser, USER_AGENT } = require('./browser');
 
 /**
  * Navigate with retry logic — increasing timeouts on each attempt.
@@ -50,10 +47,7 @@ function buildPageUrl(baseUrl, pageNum) {
  */
 async function getBrowser(existingBrowser) {
     if (existingBrowser && existingBrowser.isConnected()) return existingBrowser;
-    return puppeteer.launch({
-        headless: config.headless ? 'new' : false,
-        args: BROWSER_ARGS,
-    });
+    return launchBrowser();
 }
 
 /**

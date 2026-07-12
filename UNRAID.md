@@ -52,6 +52,14 @@ Fill in these settings:
 | **Repository** | `dealhawk` |
 | **Network Type** | `bridge` |
 | **Console shell command** | `Shell` |
+| **Extra Parameters** | `--tmpfs /tmp:rw,size=2g,mode=1777` |
+
+> ⚠️ **Extra Parameters is not optional.** Chromium writes a throwaway profile,
+> its disk cache and its shared-memory files into `/tmp` on every launch. Without
+> this flag they land in the container's writable layer, which grows by GBs over
+> time. The `--tmpfs` flag puts them in RAM instead: capped at 2GB, wiped on every
+> restart, and it never touches the array. To find this field, toggle
+> **Advanced View** (top right of the Add Container page).
 
 ### Port Mapping
 
@@ -117,6 +125,33 @@ When there's a new version:
 Your data is safe — it lives in PostgreSQL, not the container.
 
 ---
+
+## Reclaiming Disk Space
+
+If the Docker tab shows DealHawk with a multi-GB **writable layer**, it's stranded
+Chromium profiles in `/tmp` — not your images (those live on the array via the
+volume mapping).
+
+**See what's actually using it:**
+
+```bash
+docker ps -s --format '{{.Names}}\t{{.Size}}' | grep dealhawk
+docker exec dealhawk du -sh /tmp/* /app/data 2>/dev/null | sort -rh | head
+```
+
+**Reclaim it.** Pick one:
+
+1. **Just restart the container.** DealHawk now sweeps stranded profiles on boot
+   (`[Browser] Swept N stale Chromium profile dir(s)` in the log). Frees the space
+   inside the layer, though the layer file itself stays large.
+
+2. **Recreate the container** — the only way to actually shrink the writable layer.
+   In the Docker UI: container icon → **Remove**, then re-add it from the template
+   (Unraid keeps it under *Add Container → Select a template*). No data is lost;
+   everything durable is in PostgreSQL and the mapped images path.
+
+Then confirm **Extra Parameters** contains the `--tmpfs /tmp` flag from Step 4, or
+it will simply grow back.
 
 ## Troubleshooting
 

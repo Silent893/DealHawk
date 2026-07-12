@@ -1,13 +1,11 @@
-const puppeteer = require('puppeteer');
 const config = require('./config');
+const { launchBrowser, USER_AGENT } = require('./browser');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
 const IMAGES_DIR = config.imagesDir || path.join(__dirname, '..', 'data', 'images');
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const BROWSER_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
 
 if (!fs.existsSync(IMAGES_DIR)) {
     fs.mkdirSync(IMAGES_DIR, { recursive: true });
@@ -44,7 +42,7 @@ async function gotoWithRetry(page, url, opts = {}) {
 async function scrapeDetail(url, slug, browser) {
     const ownBrowser = !browser;
     if (!browser) {
-        browser = await puppeteer.launch({ headless: config.headless ? 'new' : false, args: BROWSER_ARGS });
+        browser = await launchBrowser();
     }
 
     try {
@@ -164,7 +162,7 @@ function downloadImage(imageUrl, slug, maxRedirects = 5) {
 async function checkListing(url, browser) {
     const ownBrowser = !browser;
     if (!browser) {
-        browser = await puppeteer.launch({ headless: config.headless ? 'new' : false, args: BROWSER_ARGS });
+        browser = await launchBrowser();
     }
 
     try {

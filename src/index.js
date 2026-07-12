@@ -1,10 +1,14 @@
 const db = require('./db');
 const { migrate } = require('./migrate');
 const { runJob } = require('./runner');
+const { sweepStaleProfiles } = require('./browser');
 const { start: startServer, runningJobs, trackJob, untrackJob } = require('./server');
 
 async function main() {
     const args = process.argv.slice(2);
+
+    // Reclaim Chromium profiles stranded by a crash or a previous container.
+    sweepStaleProfiles();
 
     // If started with "serve" — run the dashboard server + scheduler
     if (args[0] === 'serve' || args.length === 0) {

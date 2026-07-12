@@ -9,3 +9,8 @@ services:
       - .env
     volumes:
       - /mnt/user/junk/dealhawk-images:/app/data/images
+    # Chromium's profile, disk cache and shared-memory files (--disable-dev-shm-usage
+    # redirects those here). RAM-backed so they never reach the writable layer or
+    # wear the array, and cleared on every restart.
+    tmpfs:
+      - /tmp:rw,size=2g,mode=1777
