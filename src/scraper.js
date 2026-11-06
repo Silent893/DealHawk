@@ -1,5 +1,5 @@
 const config = require('./config');
-const { launchBrowser, USER_AGENT } = require('./browser');
+const { launchBrowser, closeBrowser, USER_AGENT } = require('./browser');
 
 /**
  * Navigate with retry logic — increasing timeouts on each attempt.
@@ -141,8 +141,9 @@ async function scrapeListings(baseUrl, knownSlugs, browser, maxPages = 2) {
     const ownBrowser = !browser;
     browser = await getBrowser(browser);
 
+    let page;
     try {
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent(USER_AGENT);
 
         let allListings = [];
@@ -177,10 +178,10 @@ async function scrapeListings(baseUrl, knownSlugs, browser, maxPages = 2) {
             // No known slugs (first run) → keep going up to maxPages
         }
 
-        await page.close();
         return allListings;
     } finally {
-        if (ownBrowser) await browser.close();
+        if (page) await page.close().catch(() => { });
+        if (ownBrowser) await closeBrowser(browser);
     }
 }
 

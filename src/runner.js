@@ -1,10 +1,15 @@
 const db = require('./db');
 const config = require('./config');
 const { scrapeListings, getBrowser } = require('./scraper');
+const { closeBrowser } = require('./browser');
 const { scrapeDetail, matchesRules, checkListing } = require('./detail-scraper');
 const { notify } = require('./notifier');
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+// A run past this has frozen: healthy runs take about 2 min, 13 min at the 99th
+// percentile. Jobs run one at a time, so a hung run would hold up every other job.
+const RUN_LIMIT = 60 * 60 * 1000;
 
 /**
  * Levenshtein distance between two strings.
@@ -178,10 +183,12 @@ function parsePostedDate(text) {
  * @param {object} job - Job row from DB
  * @param {object} [opts] - Options
  * @param {AbortSignal} [opts.signal] - Abort signal for cancellation
+ * @returns {object} Run stats; `failed` holds the reason when the run must be retried
  */
-async function runJob(job, opts = {}) {
+async function runJobNow(job, opts = {}) {
     const signal = opts.signal || null;
-    const isAborted = () => signal && signal.aborted;
+    let overLimit = false;
+    const isAborted = () => overLimit || (signal && signal.aborted);
 
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[${job.name}] Starting scrape...`);
@@ -199,11 +206,22 @@ async function runJob(job, opts = {}) {
     let rechecked = 0;
     let priceChanges = 0;
     let soldDetected = 0;
+    let failedUrls = 0;
+    let failedChecks = 0;
+    let failed = null;
 
-    // Launch ONE browser for the entire job
-    const browser = await getBrowser();
+    let browser = null;
+    let watchdog = null;
 
     try {
+        // Launch ONE browser for the entire job
+        browser = await getBrowser();
+        watchdog = setTimeout(() => {
+            console.error(`[${job.name}] Still running after ${RUN_LIMIT / 60000} min — killing its browser`);
+            overLimit = true;
+            browser.process().kill('SIGKILL');
+        }, RUN_LIMIT);
+
         // Get known slugs for multi-page detection
         const knownResult = await db.query(
             'SELECT slug, status FROM listings WHERE job_id = $1',
@@ -224,6 +242,7 @@ async function runJob(job, opts = {}) {
                 listings = listings.concat(results);
             } catch (urlErr) {
                 console.error(`  ✗ Failed to scrape URL: ${url} — ${urlErr.message}`);
+                failedUrls++;
                 // Continue to next URL instead of crashing
             }
         }
@@ -423,6 +442,7 @@ async function runJob(job, opts = {}) {
                         }
                     } catch (err) {
                         console.error(`    ✗ Check failed for ${listing.slug}: ${err.message}`);
+                        failedChecks++;
                     }
                 }
             }
@@ -442,26 +462,52 @@ async function runJob(job, opts = {}) {
             });
         }
 
+        const problems = [];
+        if (overLimit) problems.push(`Stopped after ${RUN_LIMIT / 60000} min`);
+        else if (isAborted()) problems.push('Cancelled by user');
+        if (failedUrls > 0) problems.push(`${failedUrls} of ${urls.length} list pages failed`);
+        if (failedChecks > 0) problems.push(`${failedChecks} of ${rechecked + failedChecks} checks failed`);
+        const error = problems.length > 0 ? problems.join('; ') : null;
+
         await db.query(
             `UPDATE scrape_runs SET finished_at = NOW(),
          listings_found = $1, new_listings = $2, deep_dived = $3,
          rechecked = $4, price_changes = $5, sold_detected = $6,
          error = $8
        WHERE id = $7`,
-            [listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected, runId,
-                isAborted() ? 'Cancelled by user' : null]
+            [listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected, runId, error]
         );
 
-        await db.query('UPDATE jobs SET last_run_at = NOW() WHERE id = $1', [job.id]);
+        // A run where every page failed throws nothing, but it tracked nothing either.
+        // Moving last_run_at would make it look done until tomorrow.
+        const nothingWorked = urls.length > 0 && failedUrls === urls.length && rechecked === 0;
+        if (overLimit || nothingWorked) {
+            failed = error;
+        } else {
+            await db.query('UPDATE jobs SET last_run_at = NOW() WHERE id = $1', [job.id]);
+        }
 
     } catch (err) {
         console.error(`[${job.name}] Error: ${err.message}`);
-        await db.query('UPDATE scrape_runs SET finished_at = NOW(), error = $1 WHERE id = $2', [err.message, runId]);
+        failed = err.message;
+        await db.query('UPDATE scrape_runs SET finished_at = NOW(), error = $1 WHERE id = $2', [err.message, runId])
+            .catch(dbErr => console.error(`[${job.name}] Could not close run ${runId}: ${dbErr.message}`));
     } finally {
-        try { await browser.close(); } catch (_) { /* already closed */ }
+        clearTimeout(watchdog);
+        if (browser) await closeBrowser(browser);
     }
 
-    return { listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected };
+    return { listingsFound, newListings, deepDived, rechecked, priceChanges, soldDetected, failed };
+}
+
+// One browser at a time, whoever asks. They share the container's memory with /tmp,
+// and a few at once thrash it until every run stalls.
+let queue = Promise.resolve();
+
+function runJob(job, opts = {}) {
+    const run = queue.then(() => runJobNow(job, opts));
+    queue = run.catch(() => { });
+    return run;
 }
 
 module.exports = { runJob };

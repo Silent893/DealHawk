@@ -1,5 +1,5 @@
 const config = require('./config');
-const { launchBrowser } = require('./browser');
+const { launchBrowser, closeBrowser: shutBrowser } = require('./browser');
 
 /**
  * Get a shared browser instance for scanning operations.
@@ -15,7 +15,7 @@ async function getBrowser() {
 
 async function closeBrowser() {
     if (_browser && _browser.connected) {
-        await _browser.close();
+        await shutBrowser(_browser);
         _browser = null;
     }
 }

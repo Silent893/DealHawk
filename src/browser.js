@@ -21,32 +21,78 @@ const BROWSER_ARGS = [
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// How long a browser gets to close itself before it is killed.
+const CLOSE_TIMEOUT = 15000;
+
 let seq = 0;
+
+// Profiles held by a running browser. Anything else under PROFILE_ROOT is stranded.
+const liveProfiles = new Set();
 
 function rmrf(dir) {
     try {
-        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
     } catch (_) {
         // Best effort — a stranded profile is not worth failing a scrape over.
     }
 }
 
 /**
- * Launch Chromium with its profile under PROFILE_ROOT, removed when the browser
- * disconnects — which covers a crash as well as a normal close.
+ * Remove profiles no running browser holds. PROFILE_ROOT is RAM-backed and counts
+ * against the container's memory limit, so nothing may pile up there.
+ */
+function sweepOrphanProfiles() {
+    for (const name of fs.readdirSync(PROFILE_ROOT)) {
+        const dir = path.join(PROFILE_ROOT, name);
+        if (!liveProfiles.has(dir)) rmrf(dir);
+    }
+}
+
+/**
+ * Launch Chromium with its profile under PROFILE_ROOT, removed when the process
+ * exits — which covers a crash as well as a normal close. 'disconnected' is too
+ * early: Chromium can still be writing to the profile after the socket closes.
  */
 async function launchBrowser() {
     fs.mkdirSync(PROFILE_ROOT, { recursive: true });
+    sweepOrphanProfiles();
+
     const userDataDir = path.join(PROFILE_ROOT, `p${process.pid}-${seq++}`);
+    const release = () => {
+        liveProfiles.delete(userDataDir);
+        rmrf(userDataDir);
+    };
+    liveProfiles.add(userDataDir);
 
-    const browser = await puppeteer.launch({
-        headless: config.headless ? 'new' : false,
-        args: BROWSER_ARGS,
-        userDataDir,
-    });
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            headless: config.headless ? 'new' : false,
+            args: BROWSER_ARGS,
+            userDataDir,
+        });
+    } catch (err) {
+        release();
+        throw err;
+    }
 
-    browser.once('disconnected', () => rmrf(userDataDir));
+    browser.process().once('exit', release);
     return browser;
+}
+
+/**
+ * Close a browser, killing it if it won't go. A frozen Chromium can hold close()
+ * open indefinitely, and the job queue would wait on it.
+ */
+async function closeBrowser(browser) {
+    const proc = browser.process();
+    let timer;
+    await Promise.race([
+        browser.close().catch(() => { }),
+        new Promise(resolve => { timer = setTimeout(resolve, CLOSE_TIMEOUT); }),
+    ]);
+    clearTimeout(timer);
+    if (proc && proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
 }
 
 /**
@@ -69,4 +115,4 @@ function sweepStaleProfiles() {
     console.log(`[Browser] Swept ${stale.length} stale Chromium profile dir(s) from ${tmp}`);
 }
 
-module.exports = { launchBrowser, sweepStaleProfiles, BROWSER_ARGS, USER_AGENT, PROFILE_ROOT };
+module.exports = { launchBrowser, closeBrowser, sweepStaleProfiles, BROWSER_ARGS, USER_AGENT, PROFILE_ROOT };

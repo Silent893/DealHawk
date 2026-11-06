@@ -1,9 +1,10 @@
 const config = require('./config');
-const { launchBrowser, USER_AGENT } = require('./browser');
+const { launchBrowser, closeBrowser, USER_AGENT } = require('./browser');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { pipeline } = require('stream');
 
 const IMAGES_DIR = config.imagesDir || path.join(__dirname, '..', 'data', 'images');
 
@@ -45,8 +46,9 @@ async function scrapeDetail(url, slug, browser) {
         browser = await launchBrowser();
     }
 
+    let page;
     try {
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent(USER_AGENT);
 
         console.log(`  [Detail] Loading: ${url}`);
@@ -121,10 +123,10 @@ async function scrapeDetail(url, slug, browser) {
             }
         }
 
-        await page.close();
         return { ...detail, imagePath };
     } finally {
-        if (ownBrowser) await browser.close();
+        if (page) await page.close().catch(() => { });
+        if (ownBrowser) await closeBrowser(browser);
     }
 }
 
@@ -141,16 +143,19 @@ function downloadImage(imageUrl, slug, maxRedirects = 5) {
         if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
 
         const client = imageUrl.startsWith('https') ? https : http;
-        client.get(imageUrl, (res) => {
+        const req = client.get(imageUrl, { timeout: config.scrapeTimeout }, (res) => {
             if (res.statusCode === 301 || res.statusCode === 302) {
                 return downloadImage(res.headers.location, slug, maxRedirects - 1).then(resolve).catch(reject);
             }
             if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
-            const stream = fs.createWriteStream(filepath);
-            res.pipe(stream);
-            stream.on('finish', () => { stream.close(); resolve(filename); });
-            stream.on('error', reject);
-        }).on('error', reject);
+            pipeline(res, fs.createWriteStream(filepath), (err) => {
+                if (!err) return resolve(filename);
+                fs.unlink(filepath, () => { }); // a partial file would count as downloaded
+                reject(err);
+            });
+        });
+        req.on('timeout', () => req.destroy(new Error('Image download timed out')));
+        req.on('error', reject);
     });
 }
 
@@ -165,26 +170,24 @@ async function checkListing(url, browser) {
         browser = await launchBrowser();
     }
 
+    let page;
     try {
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent(USER_AGENT);
 
         const response = await gotoWithRetry(page, url);
         const status = response ? response.status() : 0;
 
         if (status === 404 || status === 410 || status >= 500) {
-            await page.close();
             return { alive: false, priceValue: null, priceType: null, priceText: '' };
         }
 
         const currentUrl = page.url();
         const pageContent = await page.evaluate(() => document.body ? document.body.textContent : '');
         if (currentUrl.includes('/ads/') && !currentUrl.includes('/ad/')) {
-            await page.close();
             return { alive: false, priceValue: null, priceType: null, priceText: '' };
         }
         if (pageContent.includes('This ad is no longer available') || pageContent.includes('Ad not found') || pageContent.includes('has been sold')) {
-            await page.close();
             return { alive: false, priceValue: null, priceType: null, priceText: '' };
         }
 
@@ -204,10 +207,10 @@ async function checkListing(url, browser) {
             };
         });
 
-        await page.close();
         return { alive: true, ...priceData };
     } finally {
-        if (ownBrowser) await browser.close();
+        if (page) await page.close().catch(() => { });
+        if (ownBrowser) await closeBrowser(browser);
     }
 }
 

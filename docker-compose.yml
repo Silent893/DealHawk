@@ -3,6 +3,9 @@ services:
     build: .
     container_name: dealhawk
     restart: unless-stopped
+    # Chromium's helpers end up as PID 1's children, and node doesn't reap them.
+    init: true
+    mem_limit: 2g
     ports:
       - "3082:3000"
     env_file:
@@ -11,6 +14,6 @@ services:
       - /mnt/user/junk/dealhawk-images:/app/data/images
     # Chromium's profile, disk cache and shared-memory files (--disable-dev-shm-usage
     # redirects those here). RAM-backed so they never reach the writable layer or
-    # wear the array, and cleared on every restart.
+    # wear the array, and cleared on every restart. It counts against mem_limit.
     tmpfs:
-      - /tmp:rw,size=2g,mode=1777
+      - /tmp:rw,size=512m,mode=1777

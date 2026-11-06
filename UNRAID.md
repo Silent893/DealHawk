@@ -52,13 +52,15 @@ Fill in these settings:
 | **Repository** | `dealhawk` |
 | **Network Type** | `bridge` |
 | **Console shell command** | `Shell` |
-| **Extra Parameters** | `--tmpfs /tmp:rw,size=2g,mode=1777` |
+| **Extra Parameters** | `--memory=2G --init --restart=unless-stopped --tmpfs /tmp:rw,size=512m,mode=1777` |
 
 > ⚠️ **Extra Parameters is not optional.** Chromium writes a throwaway profile,
 > its disk cache and its shared-memory files into `/tmp` on every launch. Without
 > this flag they land in the container's writable layer, which grows by GBs over
-> time. The `--tmpfs` flag puts them in RAM instead: capped at 2GB, wiped on every
-> restart, and it never touches the array. To find this field, toggle
+> time. The `--tmpfs` flag puts them in RAM instead: capped at 512MB, wiped on every
+> restart, and it never touches the array. That RAM counts against `--memory`, so
+> keep the tmpfs well under it. `--init` reaps Chromium's helper processes, which
+> node as PID 1 leaves as zombies. To find this field, toggle
 > **Advanced View** (top right of the Add Container page).
 
 ### Port Mapping

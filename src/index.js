@@ -4,6 +4,9 @@ const { runJob } = require('./runner');
 const { sweepStaleProfiles } = require('./browser');
 const { start: startServer, runningJobs, trackJob, untrackJob } = require('./server');
 
+// A failed job stays due, so without this wait it would relaunch every minute.
+const RETRY_DELAY = 30 * 60 * 1000;
+
 async function main() {
     const args = process.argv.slice(2);
 
@@ -50,7 +53,14 @@ async function main() {
 function startScheduler() {
     console.log('[Scheduler] Started — checking jobs every minute');
 
+    const retryAt = new Map(); // jobId → earliest next attempt, ms
+    let checking = false;
+
     setInterval(async () => {
+        // Each tick works through every due job, so a new one must not start beside it.
+        if (checking) return;
+        checking = true;
+
         try {
             const result = await db.query(`
         SELECT * FROM jobs
@@ -64,17 +74,31 @@ function startScheduler() {
                     console.log(`[Scheduler] Skipping ${job.name} — already running`);
                     continue;
                 }
+                if (Date.now() < (retryAt.get(job.id) || 0)) continue;
+
                 console.log(`[Scheduler] Running job: ${job.name}`);
                 const ac = new AbortController();
                 trackJob(job.id, ac, null);
+                let failed;
                 try {
-                    await runJob(job, { signal: ac.signal });
+                    ({ failed } = await runJob(job, { signal: ac.signal }));
+                } catch (err) {
+                    failed = err.message;
                 } finally {
                     untrackJob(job.id);
+                }
+
+                if (failed) {
+                    console.error(`[Scheduler] ${job.name} failed, retrying in ${RETRY_DELAY / 60000} min: ${failed}`);
+                    retryAt.set(job.id, Date.now() + RETRY_DELAY);
+                } else {
+                    retryAt.delete(job.id);
                 }
             }
         } catch (err) {
             console.error('[Scheduler] Error:', err.message);
+        } finally {
+            checking = false;
         }
     }, 60 * 1000); // Check every minute
 }
